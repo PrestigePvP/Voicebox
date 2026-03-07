@@ -1,0 +1,16 @@
+{
+  "name": "voicebox-worker",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "lint": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250214.0",
+    "typescript": "^5.8.2",
+    "vitest": "^4.0.18",
+    "wrangler": "^4.0.0"
+  }
+}

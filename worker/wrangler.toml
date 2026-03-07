@@ -1,0 +1,14 @@
+name = "voicebox"
+main = "src/index.ts"
+compatibility_date = "2025-03-01"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "TRANSCRIPTION_SESSION"
+class_name = "TranscriptionSession"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["TranscriptionSession"]
