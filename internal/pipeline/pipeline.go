@@ -22,6 +22,15 @@ type AudioParams struct {
 	Encoding   string
 }
 
+type FocusContext struct {
+	AppName     string
+	BundleID    string
+	ElementRole string
+	Title       string
+	Placeholder string
+	Value       string
+}
+
 type serverMessage struct {
 	Type      string `json:"type"`
 	Stage     string `json:"stage,omitempty"`
@@ -31,7 +40,7 @@ type serverMessage struct {
 	Message   string `json:"message,omitempty"`
 }
 
-func Run(ctx context.Context, workerURL, token string, params AudioParams, chunks <-chan []byte, onStage func(string)) (*Result, error) {
+func Run(ctx context.Context, workerURL, token string, params AudioParams, focus FocusContext, chunks <-chan []byte, onStage func(string)) (*Result, error) {
 	wsURL := strings.Replace(workerURL, "https://", "wss://", 1)
 	wsURL = strings.Replace(wsURL, "http://", "ws://", 1)
 
@@ -45,6 +54,24 @@ func Run(ctx context.Context, workerURL, token string, params AudioParams, chunk
 	q.Set("sampleRate", strconv.Itoa(params.SampleRate))
 	q.Set("channels", strconv.Itoa(params.Channels))
 	q.Set("encoding", params.Encoding)
+	if focus.AppName != "" {
+		q.Set("appName", focus.AppName)
+	}
+	if focus.BundleID != "" {
+		q.Set("bundleID", focus.BundleID)
+	}
+	if focus.ElementRole != "" {
+		q.Set("elementRole", focus.ElementRole)
+	}
+	if focus.Title != "" {
+		q.Set("title", focus.Title)
+	}
+	if focus.Placeholder != "" {
+		q.Set("placeholder", focus.Placeholder)
+	}
+	if focus.Value != "" {
+		q.Set("value", focus.Value)
+	}
 	u.RawQuery = q.Encode()
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)

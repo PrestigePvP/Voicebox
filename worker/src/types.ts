@@ -16,8 +16,19 @@ export interface AudioConfig {
   encoding: string;
 }
 
+export interface FocusContext {
+  appName: string;
+  bundleID: string;
+  elementRole: string;
+  title: string;
+  placeholder: string;
+  value: string;
+}
+
 export interface Env {
   AI: Ai;
   TRANSCRIPTION_SESSION: DurableObjectNamespace;
   VOICEBOX_TOKEN: string;
+  STT_MODEL?: string;
+  FORMAT_MODEL?: string;
 }

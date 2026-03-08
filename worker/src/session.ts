@@ -1,11 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import type { AudioConfig, ClientMessage, Env, ServerMessage } from "./types";
+import type { AudioConfig, ClientMessage, Env, FocusContext, ServerMessage } from "./types";
+import { buildSystemPrompt, buildUserMessage } from "./prompt";
 import { wrapPcmAsWav } from "./wav";
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
-
-const FORMATTING_PROMPT =
-  "You are a text formatter. Take the raw speech-to-text transcription and return it with proper punctuation, capitalization, and paragraph breaks. Do not change the words, only fix formatting. Return only the formatted text.";
 
 const sendMessage = (ws: WebSocket, msg: ServerMessage) => {
   ws.send(JSON.stringify(msg));
@@ -15,6 +13,7 @@ export class TranscriptionSession extends DurableObject<Env> {
   private audioChunks: Uint8Array[] = [];
   private totalBytes = 0;
   private audioConfig: AudioConfig = { sampleRate: 16000, channels: 1, encoding: "pcm_s16le" };
+  private focusContext: FocusContext = { appName: "", bundleID: "", elementRole: "", title: "", placeholder: "", value: "" };
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -29,6 +28,14 @@ export class TranscriptionSession extends DurableObject<Env> {
     const encoding =
       request.headers.get("X-VoiceBox-Encoding") ?? url.searchParams.get("encoding") ?? "pcm_s16le";
     this.audioConfig = { sampleRate, channels, encoding };
+    this.focusContext = {
+      appName: url.searchParams.get("appName") ?? "",
+      bundleID: url.searchParams.get("bundleID") ?? "",
+      elementRole: url.searchParams.get("elementRole") ?? "",
+      title: url.searchParams.get("title") ?? "",
+      placeholder: url.searchParams.get("placeholder") ?? "",
+      value: url.searchParams.get("value") ?? "",
+    };
 
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
@@ -76,6 +83,7 @@ export class TranscriptionSession extends DurableObject<Env> {
   private resetState() {
     this.audioChunks = [];
     this.totalBytes = 0;
+    this.focusContext = { appName: "", bundleID: "", elementRole: "", title: "", placeholder: "", value: "" };
   }
 
   private async processAudio(ws: WebSocket) {
@@ -96,7 +104,8 @@ export class TranscriptionSession extends DurableObject<Env> {
 
     let sttResult: { text: string };
     try {
-      sttResult = (await this.env.AI.run("@cf/openai/whisper-large-v3-turbo", {
+      const sttModel = this.env.STT_MODEL || "@cf/openai/whisper-large-v3-turbo";
+      sttResult = (await this.env.AI.run(sttModel as Parameters<Ai["run"]>[0], {
         audio: audioBase64,
       })) as { text: string };
     } catch (e) {
@@ -111,10 +120,11 @@ export class TranscriptionSession extends DurableObject<Env> {
 
     let formatted: { response: string | null };
     try {
-      formatted = (await this.env.AI.run("@cf/ibm-granite/granite-4.0-h-micro", {
+      const formatModel = this.env.FORMAT_MODEL || "@cf/ibm-granite/granite-4.0-h-micro";
+      formatted = (await this.env.AI.run(formatModel as Parameters<Ai["run"]>[0], {
         messages: [
-          { role: "system", content: FORMATTING_PROMPT },
-          { role: "user", content: sttResult.text },
+          { role: "system", content: buildSystemPrompt(this.focusContext) },
+          { role: "user", content: buildUserMessage(sttResult.text, this.focusContext) },
         ],
       })) as { response: string | null };
     } catch (e) {

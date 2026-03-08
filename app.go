@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/PrestigePvP/voicebox/internal/accessibility"
 	"github.com/PrestigePvP/voicebox/internal/audio"
 	"github.com/PrestigePvP/voicebox/internal/config"
 	hk "github.com/PrestigePvP/voicebox/internal/hotkey"
@@ -99,6 +100,8 @@ func (a *App) onHotkeyDown() {
 	a.recording = true
 	a.mu.Unlock()
 
+	focusCtx := accessibility.GetFocusContext()
+
 	capture, err := audio.NewCapture(a.cfg.Audio.SampleRate, a.cfg.Audio.Channels, a.cfg.Audio.ChunkSize, func(level float64) {
 		runtime.EventsEmit(a.ctx, "voicebox:level", level)
 	})
@@ -129,7 +132,7 @@ func (a *App) onHotkeyDown() {
 		"startTime": time.Now().UnixMilli(),
 	})
 
-	go a.runPipeline(capture)
+	go a.runPipeline(capture, focusCtx)
 }
 
 func (a *App) onHotkeyUp() {
@@ -155,7 +158,7 @@ func (a *App) onHotkeyUp() {
 	})
 }
 
-func (a *App) runPipeline(capture *audio.Capture) {
+func (a *App) runPipeline(capture *audio.Capture, focusCtx accessibility.FocusContext) {
 	defer capture.Close()
 
 	result, err := pipeline.Run(
@@ -166,6 +169,14 @@ func (a *App) runPipeline(capture *audio.Capture) {
 			SampleRate: a.cfg.Audio.SampleRate,
 			Channels:   a.cfg.Audio.Channels,
 			Encoding:   "pcm_s16le",
+		},
+		pipeline.FocusContext{
+			AppName:     focusCtx.AppName,
+			BundleID:    focusCtx.BundleID,
+			ElementRole: focusCtx.ElementRole,
+			Title:       focusCtx.Title,
+			Placeholder: focusCtx.Placeholder,
+			Value:       focusCtx.Value,
 		},
 		capture.Chunks(),
 		func(stage string) {
@@ -192,6 +203,10 @@ func (a *App) runPipeline(capture *audio.Capture) {
 
 	if err := copyToClipboard(result.Formatted); err != nil {
 		log.Printf("Clipboard error: %v", err)
+	}
+
+	if focusCtx.PID > 0 {
+		accessibility.PasteIntoApp(focusCtx.PID)
 	}
 
 	runtime.EventsEmit(a.ctx, "voicebox:state", map[string]interface{}{
