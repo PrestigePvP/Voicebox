@@ -19,15 +19,14 @@ export const buildSystemPrompt = (ctx: FocusContext): string => {
 };
 
 export const buildUserMessage = (transcription: string, ctx: FocusContext): string => {
-  const hasContext = ctx.appName || ctx.elementRole || ctx.title || ctx.placeholder || ctx.value;
-  if (!hasContext) return transcription;
+  const contextEntries = Object.entries(ctx)
+    .filter(([, value]) => typeof value === "string" && value.length > 0)
+    .map(([key, value]) => `  <${key}>${value}</${key}>`);
+  const transcriptionEntry = `  <transcription>${transcription}</transcription>`;
 
-  const contextFields: string[] = [];
-  if (ctx.appName) contextFields.push(`  <app>${ctx.appName}</app>`);
-  if (ctx.elementRole) contextFields.push(`  <fieldType>${ctx.elementRole}</fieldType>`);
-  if (ctx.title) contextFields.push(`  <label>${ctx.title}</label>`);
-  if (ctx.placeholder) contextFields.push(`  <placeholder>${ctx.placeholder}</placeholder>`);
-  if (ctx.value) contextFields.push(`  <existingText>${ctx.value}</existingText>`);
-
-  return `<context>\n${contextFields.join("\n")}\n</context>\n\n<transcription>${transcription}</transcription>`;
+  if (contextEntries.length === 0) {
+    return transcriptionEntry;
+  }
+  const contextEntry = `<context>${contextEntries.join("\n")}</context>`;
+  return [contextEntry, transcriptionEntry].join("\n\n");
 };

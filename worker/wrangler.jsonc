@@ -1,0 +1,30 @@
+{
+  "name": "voicebox",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-03-01",
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "vars": {
+    "STT_MODEL": "@cf/openai/whisper-large-v3-turbo",
+    "FORMAT_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"
+  },
+
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TRANSCRIPTION_SESSION",
+        "class_name": "TranscriptionSession"
+      }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": ["TranscriptionSession"]
+    }
+  ]
+}

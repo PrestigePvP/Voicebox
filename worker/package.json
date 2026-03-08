@@ -4,11 +4,13 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "format": "prettier --write .",
     "lint": "tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250214.0",
+    "prettier": "^3.5.3",
     "typescript": "^5.8.2",
     "vitest": "^4.0.18",
     "wrangler": "^4.0.0"

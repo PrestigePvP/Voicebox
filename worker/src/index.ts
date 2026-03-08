@@ -1,5 +1,3 @@
-import type { Env } from "./types";
-
 export { TranscriptionSession } from "./session";
 
 export default {
@@ -11,7 +9,9 @@ export default {
     }
 
     if (url.pathname === "/ws" && request.method === "GET") {
-      const token = request.headers.get("X-VoiceBox-Token") ?? url.searchParams.get("token");
+      const token =
+        request.headers.get("X-VoiceBox-Token") ??
+        url.searchParams.get("token");
       if (token !== env.VOICEBOX_TOKEN) {
         return Response.json({ error: "auth_failed" }, { status: 401 });
       }

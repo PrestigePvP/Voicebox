@@ -1,41 +1,49 @@
 # VoiceBox
 
-Voice-to-text tool that captures speech, transcribes it via Whisper, and formats the output with an LLM. Press a hotkey, speak, press again — formatted text lands in your clipboard.
+Voice-to-text tool that captures speech, transcribes it via Whisper, and formats the output with an LLM. Press a hotkey, speak, release — formatted text lands in your clipboard.
 
 ## How It Works
 
 ```
-┌──────────┐  PCM chunks   ┌──────────────────────────────────┐   formatted
-│  Desktop │ ──WebSocket──▶ │  Cloudflare Worker (Durable Obj) │ ──text────▶ Clipboard
-│  Binary  │ ◀─────────────│  Whisper STT → LLM Formatter     │
-└──────────┘               └──────────────────────────────────┘
+┌──────────────────────┐  PCM chunks   ┌──────────────────────────────────┐   formatted
+│  Wails Desktop App   │ ──WebSocket──▶ │  Cloudflare Worker (Durable Obj) │ ──text────▶ Clipboard
+│  (Go + React WebView)│ ◀─────────────│  Whisper STT → LLM Formatter     │
+└──────────────────────┘               └──────────────────────────────────┘
 ```
 
-1. Press **Ctrl+Shift+R** — recording starts
+1. Hold **Ctrl+Shift+R** — recording starts, overlay appears
 2. Speak into your microphone
-3. Press **Ctrl+Shift+R** again — recording stops, audio streams to the cloud
-4. Whisper transcribes, LLM formats, result is copied to clipboard
+3. Release **Ctrl+Shift+R** — audio streams to the cloud
+4. Whisper transcribes, LLM formats, result is copied to clipboard, overlay auto-hides
 
 ## Project Structure
 
 ```
 voicebox/
-├── cmd/voicebox/        # Go binary entrypoint
+├── main.go                 # Wails entrypoint, app menu
+├── app.go                  # App lifecycle, hotkey handlers, pipeline orchestration
 ├── internal/
-│   ├── audio/           # PCM audio capture (malgo/miniaudio)
-│   ├── pipeline/        # WebSocket client, streams audio to worker
-│   ├── config/          # TOML config loading
-│   ├── ui/              # System tray, hotkeys, state management
-│   ├── stt/             # Speech-to-text provider interface (stubs)
-│   └── formatter/       # LLM formatting provider interface (stubs)
-├── worker/              # Cloudflare Worker (TypeScript)
+│   ├── audio/              # PCM audio capture (malgo/miniaudio)
+│   ├── pipeline/           # WebSocket client, streams audio to worker
+│   ├── config/             # TOML config loading
+│   ├── hotkey/             # Global hotkey registration
+│   ├── stt/                # STT provider interface (stubs)
+│   └── formatter/          # LLM formatting provider interface (stubs)
+├── frontend/               # React + Tailwind overlay UI (Vite)
 │   └── src/
-│       ├── index.ts     # Router: /ws (WebSocket), /health
-│       ├── session.ts   # Durable Object: audio accumulation + AI pipeline
-│       ├── wav.ts       # PCM-to-WAV wrapper
-│       └── types.ts     # Shared types
+│       ├── App.tsx         # Frameless overlay (recording/processing/copied/error)
+│       └── hooks/          # Event listeners for Go backend state
+├── worker/                 # Cloudflare Worker (TypeScript)
+│   ├── src/
+│   │   ├── index.ts        # Router: /ws (WebSocket), /health
+│   │   ├── session.ts      # Durable Object: audio accumulation + AI pipeline
+│   │   ├── prompt.ts       # System prompt + user message builder
+│   │   ├── wav.ts          # PCM-to-WAV wrapper
+│   │   └── types.ts        # Shared types
+│   ├── test/               # Vitest tests
+│   └── wrangler.jsonc      # Worker configuration
 ├── go.mod
-└── voicebox.toml        # User config (gitignored)
+└── voicebox.toml           # User config (gitignored)
 ```
 
 ## Setup
@@ -44,6 +52,7 @@ voicebox/
 
 - Go 1.24+
 - Node.js + pnpm
+- [Wails v2](https://wails.io/) CLI
 - A Cloudflare account with Workers AI access
 
 ### Deploy the Worker
@@ -51,7 +60,8 @@ voicebox/
 ```bash
 cd worker
 pnpm install
-wrangler secret put VOICEBOX_TOKEN    # set a shared secret
+pnpm types                             # generate runtime types
+wrangler secret put VOICEBOX_TOKEN     # set a shared secret
 pnpm deploy
 ```
 
@@ -64,10 +74,8 @@ Create `voicebox.toml` in the project root or `~/.config/voicebox/voicebox.toml`
 mode = "cloud"
 
 [cloud]
-worker_url = "wss://voicebox.<your-subdomain>.workers.dev"
+worker_url = "https://voicebox.<your-subdomain>.workers.dev"
 token = "your-shared-secret"
-stt_model = "@cf/openai/whisper-large-v3-turbo"
-formatter_model = "@cf/ibm-granite/granite-4.0-h-micro"
 
 [audio]
 sample_rate = 16000
@@ -81,23 +89,40 @@ record = "ctrl+shift+r"
 ### Build and Run
 
 ```bash
-go build ./cmd/voicebox
-./voicebox
+wails dev      # dev mode with hot reload
+wails build    # production binary
 ```
 
-A system tray icon appears. Use the hotkey or tray menu to record.
+## WebSocket Protocol
+
+Client connects to `GET /ws?token=<auth-token>`.
+
+After receiving `{"type":"ready"}`, the client sends a `configure` message with audio and context settings, then streams binary PCM chunks:
+
+```
+Client                          Server
+  │── connect /ws?token=... ──────▶│
+  │◀── {"type":"ready"} ──────────│
+  │── {"type":"configure", ...} ──▶│
+  │── [binary PCM chunk] ─────────▶│
+  │── [binary PCM chunk] ─────────▶│
+  │── {"type":"audio_end"} ───────▶│
+  │◀── {"type":"processing",...} ──│
+  │◀── {"type":"result",...} ──────│
+```
+
+The `configure` message is optional (defaults apply) and can be sent at any point during the session.
 
 ## Cloud Backend
 
 - **STT**: `@cf/openai/whisper-large-v3-turbo`
-- **Formatter**: `@cf/ibm-granite/granite-4.0-h-micro`
-- Falls within free tier for typical dictation usage (~13 min/day)
+- **Formatter**: `@cf/qwen/qwen3-30b-a3b-fp8`
 
 ## Local Backend (Phase 2)
 
-- **STT**: faster-whisper (medium model, ~2GB VRAM)
-- **Formatter**: Ollama (Qwen3 0.6B)
-- Provider interfaces exist, implementations coming in Phase 2
+- **STT**: faster-whisper
+- **Formatter**: Ollama
+- Provider interfaces exist at `internal/stt/` and `internal/formatter/`
 
 ## Audio Specs
 
@@ -108,14 +133,21 @@ A system tray icon appears. Use the hotkey or tray menu to record.
 ## Development
 
 ```bash
-# Go
-go build ./cmd/voicebox    # build binary
-go test ./...              # run tests
-go vet ./...               # lint
+# Desktop app
+wails dev                              # dev server (Go + Vite hot reload)
+wails build                            # production build
+go vet ./...                           # lint Go
+go test ./internal/...                 # test Go
+
+# Frontend
+cd frontend && pnpm install && pnpm build
 
 # Worker
 cd worker
-pnpm dev                   # local dev server
-pnpm lint                  # type-check
-pnpm deploy                # deploy to Cloudflare
+pnpm dev                               # local dev server
+pnpm types                             # generate wrangler types
+pnpm lint                              # type-check
+pnpm format                            # prettier
+pnpm test                              # vitest
+pnpm deploy                            # deploy to Cloudflare
 ```

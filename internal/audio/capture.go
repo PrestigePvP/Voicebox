@@ -95,6 +95,7 @@ func (c *Capture) Start() error {
 func (c *Capture) Stop() {
 	c.stopOnce.Do(func() {
 		c.device.Stop()
+		drainAutorelease()
 
 		c.mu.Lock()
 		if len(c.buf) > 0 {

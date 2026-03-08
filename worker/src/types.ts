@@ -1,6 +1,7 @@
 export type ErrorCode = "auth_failed" | "audio_too_large" | "stt_failed" | "format_failed" | "internal";
 
 export type ClientMessage =
+  | { type: "configure"; audio?: Partial<AudioConfig>; context?: Partial<FocusContext> }
   | { type: "audio_end" }
   | { type: "cancel" };
 
@@ -23,12 +24,4 @@ export interface FocusContext {
   title: string;
   placeholder: string;
   value: string;
-}
-
-export interface Env {
-  AI: Ai;
-  TRANSCRIPTION_SESSION: DurableObjectNamespace;
-  VOICEBOX_TOKEN: string;
-  STT_MODEL?: string;
-  FORMAT_MODEL?: string;
 }

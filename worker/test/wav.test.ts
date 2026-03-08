@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildWavHeader, wrapPcmAsWav } from "./wav";
+import { buildWavHeader, wrapPcmAsWav } from "../src/wav";
 
 describe("buildWavHeader", () => {
   it("produces a 44-byte header", () => {

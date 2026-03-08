@@ -1,42 +1,44 @@
 import { DurableObject } from "cloudflare:workers";
-import type { AudioConfig, ClientMessage, Env, FocusContext, ServerMessage } from "./types";
 import { buildSystemPrompt, buildUserMessage } from "./prompt";
+import type { AudioConfig, ClientMessage, FocusContext, ServerMessage } from "./types";
 import { wrapPcmAsWav } from "./wav";
 
 const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
+
+const DEFAULT_AUDIO_CONFIG: AudioConfig = { sampleRate: 16000, channels: 1, encoding: "pcm_s16le" };
+const DEFAULT_FOCUS_CONTEXT: FocusContext = {
+  appName: "",
+  bundleID: "",
+  elementRole: "",
+  title: "",
+  placeholder: "",
+  value: "",
+};
 
 const sendMessage = (ws: WebSocket, msg: ServerMessage) => {
   ws.send(JSON.stringify(msg));
 };
 
+const extractText = (
+  result: Ai_Cf_Qwen_Qwen3_30B_A3B_Fp8_Chat_Completion_Response | string,
+): string | null => {
+  if (typeof result === "string") {
+    return result;
+  }
+  const fullContent = result.choices
+    ?.map((choice) => choice.message?.content)
+    .filter(Boolean)
+    .join("\n");
+  return fullContent ?? null;
+};
+
 export class TranscriptionSession extends DurableObject<Env> {
   private audioChunks: Uint8Array[] = [];
   private totalBytes = 0;
-  private audioConfig: AudioConfig = { sampleRate: 16000, channels: 1, encoding: "pcm_s16le" };
-  private focusContext: FocusContext = { appName: "", bundleID: "", elementRole: "", title: "", placeholder: "", value: "" };
+  private audioConfig: AudioConfig = { ...DEFAULT_AUDIO_CONFIG };
+  private focusContext: FocusContext = { ...DEFAULT_FOCUS_CONTEXT };
 
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const sampleRate = parseInt(
-      request.headers.get("X-VoiceBox-Sample-Rate") ?? url.searchParams.get("sampleRate") ?? "16000",
-      10,
-    );
-    const channels = parseInt(
-      request.headers.get("X-VoiceBox-Channels") ?? url.searchParams.get("channels") ?? "1",
-      10,
-    );
-    const encoding =
-      request.headers.get("X-VoiceBox-Encoding") ?? url.searchParams.get("encoding") ?? "pcm_s16le";
-    this.audioConfig = { sampleRate, channels, encoding };
-    this.focusContext = {
-      appName: url.searchParams.get("appName") ?? "",
-      bundleID: url.searchParams.get("bundleID") ?? "",
-      elementRole: url.searchParams.get("elementRole") ?? "",
-      title: url.searchParams.get("title") ?? "",
-      placeholder: url.searchParams.get("placeholder") ?? "",
-      value: url.searchParams.get("value") ?? "",
-    };
-
+  async fetch(_request: Request): Promise<Response> {
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
 
@@ -52,7 +54,11 @@ export class TranscriptionSession extends DurableObject<Env> {
       this.totalBytes += chunk.byteLength;
 
       if (this.totalBytes > MAX_AUDIO_BYTES) {
-        sendMessage(ws, { type: "error", code: "audio_too_large", message: "Audio exceeds 25MB limit" });
+        sendMessage(ws, {
+          type: "error",
+          code: "audio_too_large",
+          message: "Audio exceeds 25MB limit",
+        });
         ws.close(1009, "Audio too large");
         this.resetState();
         return;
@@ -64,11 +70,20 @@ export class TranscriptionSession extends DurableObject<Env> {
 
     const parsed = JSON.parse(message) as ClientMessage;
 
-    if (parsed.type === "audio_end") {
-      await this.processAudio(ws);
-    } else if (parsed.type === "cancel") {
-      this.resetState();
-      ws.close(1000, "Cancelled");
+    switch (parsed.type) {
+      case "configure":
+        if (parsed.audio) this.audioConfig = { ...this.audioConfig, ...parsed.audio };
+        if (parsed.context) this.focusContext = { ...this.focusContext, ...parsed.context };
+        break;
+
+      case "audio_end":
+        await this.processAudio(ws);
+        break;
+
+      case "cancel":
+        this.resetState();
+        ws.close(1000, "Cancelled");
+        break;
     }
   }
 
@@ -83,7 +98,7 @@ export class TranscriptionSession extends DurableObject<Env> {
   private resetState() {
     this.audioChunks = [];
     this.totalBytes = 0;
-    this.focusContext = { appName: "", bundleID: "", elementRole: "", title: "", placeholder: "", value: "" };
+    this.focusContext = { ...DEFAULT_FOCUS_CONTEXT };
   }
 
   private async processAudio(ws: WebSocket) {
@@ -97,17 +112,21 @@ export class TranscriptionSession extends DurableObject<Env> {
     }
 
     const bitsPerSample = 16;
-    const wavData = wrapPcmAsWav(combined, this.audioConfig.sampleRate, this.audioConfig.channels, bitsPerSample);
+    const wavData = wrapPcmAsWav(
+      combined,
+      this.audioConfig.sampleRate,
+      this.audioConfig.channels,
+      bitsPerSample,
+    );
 
     const binaryStr = Array.from(wavData, (byte) => String.fromCharCode(byte)).join("");
     const audioBase64 = btoa(binaryStr);
 
     let sttResult: { text: string };
     try {
-      const sttModel = this.env.STT_MODEL || "@cf/openai/whisper-large-v3-turbo";
-      sttResult = (await this.env.AI.run(sttModel as Parameters<Ai["run"]>[0], {
+      sttResult = await this.env.AI.run(this.env.STT_MODEL ?? "@cf/openai/whisper-large-v3-turbo", {
         audio: audioBase64,
-      })) as { text: string };
+      });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "STT failed";
       sendMessage(ws, { type: "error", code: "stt_failed", message: msg });
@@ -118,15 +137,14 @@ export class TranscriptionSession extends DurableObject<Env> {
 
     sendMessage(ws, { type: "processing", stage: "format" });
 
-    let formatted: { response: string | null };
+    let formatResult: Ai_Cf_Qwen_Qwen3_30B_A3B_Fp8_Chat_Completion_Response | string | null = null;
     try {
-      const formatModel = this.env.FORMAT_MODEL || "@cf/ibm-granite/granite-4.0-h-micro";
-      formatted = (await this.env.AI.run(formatModel as Parameters<Ai["run"]>[0], {
+      formatResult = await this.env.AI.run(this.env.FORMAT_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8", {
         messages: [
           { role: "system", content: buildSystemPrompt(this.focusContext) },
           { role: "user", content: buildUserMessage(sttResult.text, this.focusContext) },
         ],
-      })) as { response: string | null };
+      }) as Ai_Cf_Qwen_Qwen3_30B_A3B_Fp8_Chat_Completion_Response | string;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Formatting failed";
       sendMessage(ws, { type: "error", code: "format_failed", message: msg });
@@ -138,7 +156,7 @@ export class TranscriptionSession extends DurableObject<Env> {
     sendMessage(ws, {
       type: "result",
       raw: sttResult.text,
-      formatted: formatted.response ?? sttResult.text,
+      formatted: extractText(formatResult) ?? sttResult.text,
     });
 
     ws.close(1000, "Complete");

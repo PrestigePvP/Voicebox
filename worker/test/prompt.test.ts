@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { FocusContext } from "./types";
-import { buildSystemPrompt, buildUserMessage } from "./prompt";
+import type { FocusContext } from "../src/types";
+import { buildSystemPrompt, buildUserMessage } from "../src/prompt";
 
 const emptyContext: FocusContext = {
   appName: "",

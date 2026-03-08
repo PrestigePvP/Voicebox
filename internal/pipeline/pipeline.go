@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/gorilla/websocket"
@@ -51,27 +50,6 @@ func Run(ctx context.Context, workerURL, token string, params AudioParams, focus
 
 	q := u.Query()
 	q.Set("token", token)
-	q.Set("sampleRate", strconv.Itoa(params.SampleRate))
-	q.Set("channels", strconv.Itoa(params.Channels))
-	q.Set("encoding", params.Encoding)
-	if focus.AppName != "" {
-		q.Set("appName", focus.AppName)
-	}
-	if focus.BundleID != "" {
-		q.Set("bundleID", focus.BundleID)
-	}
-	if focus.ElementRole != "" {
-		q.Set("elementRole", focus.ElementRole)
-	}
-	if focus.Title != "" {
-		q.Set("title", focus.Title)
-	}
-	if focus.Placeholder != "" {
-		q.Set("placeholder", focus.Placeholder)
-	}
-	if focus.Value != "" {
-		q.Set("value", focus.Value)
-	}
 	u.RawQuery = q.Encode()
 
 	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
@@ -86,6 +64,26 @@ func Run(ctx context.Context, workerURL, token string, params AudioParams, focus
 	}
 	if msg.Type != "ready" {
 		return nil, fmt.Errorf("expected ready, got %s", msg.Type)
+	}
+
+	configure, _ := json.Marshal(map[string]any{
+		"type": "configure",
+		"audio": map[string]any{
+			"sampleRate": params.SampleRate,
+			"channels":   params.Channels,
+			"encoding":   params.Encoding,
+		},
+		"context": map[string]any{
+			"appName":     focus.AppName,
+			"bundleID":    focus.BundleID,
+			"elementRole": focus.ElementRole,
+			"title":       focus.Title,
+			"placeholder": focus.Placeholder,
+			"value":       focus.Value,
+		},
+	})
+	if err := conn.WriteMessage(websocket.TextMessage, configure); err != nil {
+		return nil, fmt.Errorf("sending configure: %w", err)
 	}
 
 	for chunk := range chunks {
