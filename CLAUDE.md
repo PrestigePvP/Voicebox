@@ -62,7 +62,7 @@ Local backend support (faster-whisper + Ollama) is planned for Phase 2. Provider
 
 ## Worker WebSocket Protocol
 
-Client connects to `GET /ws?token=<auth-token>`.
+Client connects to `GET /ws` with `Authorization: Bearer <token>` header.
 
 - Server sends `{"type":"ready"}`
 - Client sends `{"type":"configure","audio":{...},"context":{...}}`

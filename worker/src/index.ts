@@ -9,9 +9,8 @@ export default {
     }
 
     if (url.pathname === "/ws" && request.method === "GET") {
-      const token =
-        request.headers.get("X-VoiceBox-Token") ??
-        url.searchParams.get("token");
+      const auth = request.headers.get("Authorization");
+      const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
       if (token !== env.VOICEBOX_TOKEN) {
         return Response.json({ error: "auth_failed" }, { status: 401 });
       }

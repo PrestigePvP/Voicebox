@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -48,11 +49,10 @@ func Run(ctx context.Context, workerURL, token string, params AudioParams, focus
 		return nil, fmt.Errorf("invalid worker URL: %w", err)
 	}
 
-	q := u.Query()
-	q.Set("token", token)
-	u.RawQuery = q.Encode()
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return nil, fmt.Errorf("websocket connect: %w", err)
 	}
