@@ -21,8 +21,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Audio.ChunkSize != 4096 {
 		t.Errorf("expected chunk size 4096, got %d", cfg.Audio.ChunkSize)
 	}
-	if cfg.Hotkey.Record != "ctrl+shift+r" {
-		t.Errorf("expected hotkey %q, got %q", "ctrl+shift+r", cfg.Hotkey.Record)
+	if cfg.Hotkey.Record != "ctrl+cmd" {
+		t.Errorf("expected hotkey %q, got %q", "ctrl+cmd", cfg.Hotkey.Record)
 	}
 	if cfg.Cloud.STTModel != "@cf/openai/whisper-large-v3-turbo" {
 		t.Errorf("expected stt model %q, got %q", "@cf/openai/whisper-large-v3-turbo", cfg.Cloud.STTModel)
@@ -86,6 +86,38 @@ record = "ctrl+alt+r"
 	}
 	if cfg.Hotkey.Record != "ctrl+alt+r" {
 		t.Errorf("expected hotkey %q, got %q", "ctrl+alt+r", cfg.Hotkey.Record)
+	}
+}
+
+func TestSave(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "voicebox.toml")
+
+	cfg := DefaultConfig()
+	cfg.Cloud.WorkerURL = "wss://test.example.com/ws"
+	cfg.Cloud.Token = "test-token"
+	cfg.Hotkey.Record = "ctrl+alt+v"
+
+	if err := Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if loaded.Cloud.WorkerURL != "wss://test.example.com/ws" {
+		t.Errorf("expected worker_url %q, got %q", "wss://test.example.com/ws", loaded.Cloud.WorkerURL)
+	}
+	if loaded.Cloud.Token != "test-token" {
+		t.Errorf("expected token %q, got %q", "test-token", loaded.Cloud.Token)
+	}
+	if loaded.Hotkey.Record != "ctrl+alt+v" {
+		t.Errorf("expected hotkey %q, got %q", "ctrl+alt+v", loaded.Hotkey.Record)
+	}
+	if loaded.Audio.SampleRate != 16000 {
+		t.Errorf("expected default sample rate preserved, got %d", loaded.Audio.SampleRate)
 	}
 }
 

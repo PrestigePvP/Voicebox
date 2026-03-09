@@ -11,9 +11,9 @@ Voice-to-text tool that captures speech, transcribes it via Whisper, and formats
 └──────────────────────┘               └──────────────────────────────────┘
 ```
 
-1. Hold **Ctrl+Shift+R** — recording starts, overlay appears
+1. Hold **Ctrl+Cmd** — recording starts, overlay appears
 2. Speak into your microphone
-3. Release **Ctrl+Shift+R** — audio streams to the cloud
+3. Release **Ctrl+Cmd** — audio streams to the cloud
 4. Whisper transcribes, LLM formats, result is copied to clipboard, overlay auto-hides
 
 ## Project Structure
@@ -83,7 +83,7 @@ channels = 1
 chunk_size = 4096
 
 [hotkey]
-record = "ctrl+shift+r"
+record = "ctrl+cmd"
 ```
 
 ### Build and Run

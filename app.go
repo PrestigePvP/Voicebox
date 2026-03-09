@@ -21,6 +21,7 @@ import (
 type App struct {
 	ctx           context.Context
 	cfg           *config.Config
+	cfgPath       string
 	cleanupHotkey func()
 	mu            sync.Mutex
 	recording     bool
@@ -46,7 +47,9 @@ func initLog() {
 func (a *App) startup(ctx context.Context) {
 	initLog()
 	a.ctx = ctx
-	a.cfg = loadConfig()
+	cfg, cfgPath := loadConfig()
+	a.cfg = cfg
+	a.cfgPath = cfgPath
 
 	cleanup, err := hk.RegisterHotkey(a.cfg.Hotkey.Record,
 		func() { a.onHotkeyDown() },
@@ -54,9 +57,13 @@ func (a *App) startup(ctx context.Context) {
 	)
 	if err != nil {
 		log.Printf("Failed to register hotkey %q: %v", a.cfg.Hotkey.Record, err)
-		return
+	} else {
+		a.cleanupHotkey = cleanup
 	}
-	a.cleanupHotkey = cleanup
+
+	platformSetupDockHandler(func() {
+		a.showSettings()
+	})
 
 	log.Printf("VoiceBox ready (hotkey: %s)", a.cfg.Hotkey.Record)
 }
@@ -67,9 +74,19 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 }
 
+func (a *App) showSettings() {
+	if a.ctx != nil {
+		runtime.WindowSetSize(a.ctx, 700, 450)
+		platformShowSettings(a.ctx)
+		runtime.EventsEmit(a.ctx, "voicebox:mode", "settings")
+	}
+}
+
 func (a *App) showWindow() {
 	if a.ctx != nil {
+		runtime.WindowSetSize(a.ctx, 160, 48)
 		platformShowWindow(a.ctx)
+		runtime.EventsEmit(a.ctx, "voicebox:mode", "overlay")
 	}
 }
 
@@ -126,7 +143,7 @@ func (a *App) onHotkeyDown() {
 	a.capture = capture
 	a.mu.Unlock()
 
-	platformShowWindow(a.ctx)
+	a.showWindow()
 	runtime.EventsEmit(a.ctx, "voicebox:state", map[string]interface{}{
 		"state":     "recording",
 		"startTime": time.Now().UnixMilli(),
@@ -225,7 +242,46 @@ func copyToClipboard(text string) error {
 	return cmd.Run()
 }
 
-func loadConfig() *config.Config {
+// GetConfig returns the current configuration (Wails binding).
+func (a *App) GetConfig() *config.Config {
+	return a.cfg
+}
+
+// SaveConfig validates and persists a new configuration (Wails binding).
+func (a *App) SaveConfig(cfg config.Config) error {
+	if err := config.Save(a.cfgPath, &cfg); err != nil {
+		return err
+	}
+
+	oldHotkey := a.cfg.Hotkey.Record
+	a.cfg = &cfg
+
+	if cfg.Hotkey.Record != oldHotkey {
+		if a.cleanupHotkey != nil {
+			a.cleanupHotkey()
+			a.cleanupHotkey = nil
+		}
+		cleanup, err := hk.RegisterHotkey(cfg.Hotkey.Record,
+			func() { a.onHotkeyDown() },
+			func() { a.onHotkeyUp() },
+		)
+		if err != nil {
+			log.Printf("Failed to re-register hotkey %q: %v", cfg.Hotkey.Record, err)
+			return err
+		}
+		a.cleanupHotkey = cleanup
+		log.Printf("Hotkey updated to %s", cfg.Hotkey.Record)
+	}
+
+	return nil
+}
+
+// GetConfigPath returns the path to the active config file (Wails binding).
+func (a *App) GetConfigPath() string {
+	return a.cfgPath
+}
+
+func loadConfig() (*config.Config, string) {
 	var paths []string
 	if home, err := os.UserHomeDir(); err == nil {
 		paths = append(paths, filepath.Join(home, ".config", "voicebox", "voicebox.toml"))
@@ -239,10 +295,10 @@ func loadConfig() *config.Config {
 		cfg, err := config.Load(p)
 		if err == nil {
 			log.Printf("Loaded config from %s", p)
-			return cfg
+			return cfg, p
 		}
 	}
 
 	log.Fatal("Config not found. Create ~/.config/voicebox/voicebox.toml")
-	return nil
+	return nil, ""
 }

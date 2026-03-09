@@ -7,6 +7,8 @@ export type UIState =
   | { state: "copied" }
   | { state: "error"; message: string };
 
+export type AppMode = "settings" | "overlay";
+
 declare global {
   interface Window {
     runtime: {
@@ -14,12 +16,14 @@ declare global {
         event: string,
         callback: (...args: unknown[]) => void,
       ) => () => void;
+      WindowHide: () => void;
     };
   }
 }
 
 export const useVoiceBox = () => {
   const [uiState, setUIState] = useState<UIState>({ state: "idle" });
+  const [mode, setMode] = useState<AppMode>("settings");
   const [level, setLevel] = useState(0);
   const levelDecay = useRef<number>(0);
 
@@ -28,6 +32,13 @@ export const useVoiceBox = () => {
       "voicebox:state",
       (...args: unknown[]) => {
         setUIState(args[0] as UIState);
+      },
+    );
+
+    const cancelMode = window.runtime.EventsOn(
+      "voicebox:mode",
+      (...args: unknown[]) => {
+        setMode(args[0] as AppMode);
       },
     );
 
@@ -46,10 +57,11 @@ export const useVoiceBox = () => {
 
     return () => {
       cancelState();
+      cancelMode();
       cancelLevel();
       cancelAnimationFrame(levelDecay.current);
     };
   }, []);
 
-  return { uiState, level };
+  return { uiState, mode, level };
 };

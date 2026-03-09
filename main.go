@@ -27,8 +27,8 @@ func main() {
 		app.toggleRecording()
 	}))
 	recordMenu.Append(menu.Separator())
-	recordMenu.Append(menu.Text("Show Window", nil, func(_ *menu.CallbackData) {
-		app.showWindow()
+	recordMenu.Append(menu.Text("Show Settings", nil, func(_ *menu.CallbackData) {
+		app.showSettings()
 	}))
 	recordMenu.Append(menu.Text("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
 		app.quit()
@@ -36,11 +36,13 @@ func main() {
 
 	if err := wails.Run(&options.App{
 		Title:             "VoiceBox",
-		Width:             160,
-		Height:            48,
+		Width:             700,
+		Height:            450,
+		MinWidth:          0,
+		MinHeight:         0,
 		Frameless:         true,
-		StartHidden:       true,
-		AlwaysOnTop:       true,
+		StartHidden:       false,
+		AlwaysOnTop:       false,
 		HideWindowOnClose: true,
 		BackgroundColour:  &options.RGBA{R: 0, G: 0, B: 0, A: 0},
 		Menu:              appMenu,

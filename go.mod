@@ -7,7 +7,6 @@ require (
 	github.com/gen2brain/malgo v0.11.24
 	github.com/gorilla/websocket v1.5.3
 	github.com/wailsapp/wails/v2 v2.11.0
-	golang.design/x/hotkey v0.4.1
 )
 
 require (

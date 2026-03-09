@@ -1,1 +1,13 @@
 @import "tailwindcss";
+
+.input {
+  @apply w-full rounded-lg border border-zinc-700 bg-zinc-800 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500;
+}
+
+.radio-card {
+  @apply flex-1 cursor-pointer rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-center text-sm text-zinc-400 transition-colors hover:border-zinc-600;
+}
+
+.radio-card-active {
+  @apply border-blue-500 bg-blue-500/10 text-blue-400;
+}

@@ -1,4 +1,6 @@
 import { useVoiceBox } from "./hooks/use-voicebox";
+import TitleBar from "./components/title-bar";
+import SettingsForm from "./components/settings-form";
 
 const BAR_WEIGHTS = [0.5, 0.75, 1.0, 0.75, 0.5];
 
@@ -14,9 +16,7 @@ const VoiceMeter = ({ level }: { level: number }) => (
   </div>
 );
 
-const App = () => {
-  const { uiState, level } = useVoiceBox();
-
+const Overlay = ({ uiState, level }: { uiState: ReturnType<typeof useVoiceBox>["uiState"]; level: number }) => {
   if (uiState.state === "copied") {
     return (
       <div className="flex h-screen w-screen items-center justify-center">
@@ -69,6 +69,23 @@ const App = () => {
   }
 
   return <div className="h-screen w-screen" />;
+};
+
+const App = () => {
+  const { uiState, mode, level } = useVoiceBox();
+
+  if (mode === "settings") {
+    return (
+      <div className="flex flex-col h-screen bg-zinc-900 text-zinc-100 rounded-lg overflow-hidden">
+        <TitleBar />
+        <div className="flex-1 overflow-y-auto">
+          <SettingsForm />
+        </div>
+      </div>
+    );
+  }
+
+  return <Overlay uiState={uiState} level={level} />;
 };
 
 export default App;

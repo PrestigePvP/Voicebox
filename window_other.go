@@ -16,3 +16,12 @@ func platformShowWindow(ctx context.Context) {
 func platformHideWindow(ctx context.Context) {
 	runtime.WindowHide(ctx)
 }
+
+func platformShowSettings(ctx context.Context) {
+	runtime.WindowSetAlwaysOnTop(ctx, false)
+	runtime.WindowSetSize(ctx, 700, 450)
+	runtime.WindowCenter(ctx)
+	runtime.WindowShow(ctx)
+}
+
+func platformSetupDockHandler(_ func()) {}
