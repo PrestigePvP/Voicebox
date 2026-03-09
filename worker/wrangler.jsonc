@@ -9,7 +9,7 @@
 
   "vars": {
     "STT_MODEL": "@cf/openai/whisper-large-v3-turbo",
-    "FORMAT_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8"
+    "FORMAT_MODEL": "@cf/meta/llama-3.2-3b-instruct"
   },
 
   "durable_objects": {

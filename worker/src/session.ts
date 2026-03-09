@@ -19,8 +19,10 @@ const sendMessage = (ws: WebSocket, msg: ServerMessage) => {
   ws.send(JSON.stringify(msg));
 };
 
+type ChatCompletionResponse = { choices?: Array<{ message?: { content?: string } }> };
+
 const extractText = (
-  result: Ai_Cf_Qwen_Qwen3_30B_A3B_Fp8_Chat_Completion_Response | string,
+  result: ChatCompletionResponse | string,
 ): string | null => {
   if (typeof result === "string") {
     return result;
@@ -137,14 +139,14 @@ export class TranscriptionSession extends DurableObject<Env> {
 
     sendMessage(ws, { type: "processing", stage: "format" });
 
-    let formatResult: Ai_Cf_Qwen_Qwen3_30B_A3B_Fp8_Chat_Completion_Response | string | null = null;
+    let formatResult: ChatCompletionResponse | string | null = null;
     try {
-      formatResult = await this.env.AI.run(this.env.FORMAT_MODEL ?? "@cf/qwen/qwen3-30b-a3b-fp8", {
+      formatResult = await this.env.AI.run(this.env.FORMAT_MODEL ?? "@cf/meta/llama-3.2-3b-instruct", {
         messages: [
           { role: "system", content: buildSystemPrompt(this.focusContext) },
           { role: "user", content: buildUserMessage(sttResult.text, this.focusContext) },
         ],
-      }) as Ai_Cf_Qwen_Qwen3_30B_A3B_Fp8_Chat_Completion_Response | string;
+      }) as ChatCompletionResponse | string;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Formatting failed";
       sendMessage(ws, { type: "error", code: "format_failed", message: msg });
