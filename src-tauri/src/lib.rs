@@ -5,9 +5,9 @@ mod hotkey;
 mod pipeline;
 
 use config::Config;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::io::Write;
 use tauri::{
     image::Image,
     menu::{MenuBuilder, MenuItemBuilder},
@@ -146,8 +146,10 @@ fn on_hotkey_up(app_handle: AppHandle) {
     if let Some(ref handle) = s.capture_handle {
         handle.stop();
     }
-    s.capture_handle = None;
+    let _capture = s.capture_handle.take();
     s.recording = false;
+    drop(s);
+    drop(_capture);
 
     let _ = app_handle.emit(
         "voicebox:state",
@@ -167,8 +169,7 @@ async fn run_pipeline(
     let (server_url, token) = if config.provider.mode == "local" {
         (config.local.server_url.clone(), config.local.token.clone())
     } else {
-        log::info!("Connecting to {} (token len: {})", config.cloud.worker_url, config.cloud.token.len());
-        (config.cloud.worker_url.clone(), config.cloud.token.clone())
+(config.cloud.worker_url.clone(), config.cloud.token.clone())
     };
 
     let app_stage = app.clone();
@@ -180,14 +181,7 @@ async fn run_pipeline(
             channels: config.audio.channels,
             encoding: "pcm_s16le".into(),
         },
-        pipeline::FocusContext {
-            app_name: focus_ctx.app_name.clone(),
-            bundle_id: focus_ctx.bundle_id.clone(),
-            element_role: focus_ctx.element_role.clone(),
-            title: focus_ctx.title.clone(),
-            placeholder: focus_ctx.placeholder.clone(),
-            value: focus_ctx.value.clone(),
-        },
+        pipeline::FocusContext::from(&focus_ctx),
         chunk_rx,
         move |stage| {
             let _ = app_stage.emit(
@@ -233,7 +227,6 @@ async fn run_pipeline(
 }
 
 fn write_clipboard(text: &str) -> Result<(), String> {
-    use std::io::Write;
     use std::process::{Command, Stdio};
 
     let mut child = Command::new("pbcopy")
@@ -311,16 +304,17 @@ fn init_log() {
 }
 
 fn chrono_timestamp() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now()
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap();
-    let secs = now.as_secs();
-    let hours = (secs % 86400) / 3600;
-    let mins = (secs % 3600) / 60;
-    let s = secs % 60;
+    let secs = now.as_secs() as libc::time_t;
     let millis = now.subsec_millis();
-    format!("{:02}:{:02}:{:02}.{:03}", hours, mins, s, millis)
+    let mut tm = unsafe { std::mem::zeroed::<libc::tm>() };
+    unsafe { libc::localtime_r(&secs, &mut tm) };
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        tm.tm_hour, tm.tm_min, tm.tm_sec, millis
+    )
 }
 
 fn now_millis() -> u64 {
@@ -366,6 +360,7 @@ pub fn run() {
             .inner_size(160.0, 48.0)
             .decorations(false)
             .transparent(true)
+            .background_color(tauri::window::Color(0, 0, 0, 0))
             .always_on_top(true)
             .skip_taskbar(true)
             .visible(false)

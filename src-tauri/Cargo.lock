@@ -4817,7 +4817,7 @@ dependencies = [
  "dirs",
  "env_logger",
  "futures-util",
- "http",
+ "libc",
  "log",
  "serde",
  "serde_json",

@@ -30,6 +30,19 @@ pub struct FocusContext {
     pub value: String,
 }
 
+impl From<&crate::accessibility::FocusContext> for FocusContext {
+    fn from(ctx: &crate::accessibility::FocusContext) -> Self {
+        Self {
+            app_name: ctx.app_name.clone(),
+            bundle_id: ctx.bundle_id.clone(),
+            element_role: ctx.element_role.clone(),
+            title: ctx.title.clone(),
+            placeholder: ctx.placeholder.clone(),
+            value: ctx.value.clone(),
+        }
+    }
+}
+
 #[derive(Deserialize)]
 struct ServerMessage {
     #[serde(rename = "type")]
@@ -59,8 +72,14 @@ where
 {
     let ws_url = worker_url
         .replace("https://", "wss://")
-        .replace("http://", "ws://");
-    let ws_url = format!("{}/ws", ws_url);
+        .replace("http://", "ws://")
+        .trim_end_matches('/')
+        .to_string();
+    let ws_url = if ws_url.ends_with("/ws") {
+        ws_url
+    } else {
+        format!("{}/ws", ws_url)
+    };
 
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     let mut request = ws_url
@@ -146,13 +165,4 @@ where
             _ => {}
         }
     }
-}
-
-fn extract_host(url: &str) -> String {
-    url.replace("wss://", "")
-        .replace("ws://", "")
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .to_string()
 }
