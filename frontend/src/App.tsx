@@ -1,3 +1,4 @@
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useVoiceBox } from "./hooks/use-voicebox";
 import TitleBar from "./components/title-bar";
 import SettingsForm from "./components/settings-form";
@@ -71,10 +72,12 @@ const Overlay = ({ uiState, level }: { uiState: ReturnType<typeof useVoiceBox>["
   return <div className="h-screen w-screen" />;
 };
 
-const App = () => {
-  const { uiState, mode, level } = useVoiceBox();
+const windowLabel = getCurrentWebviewWindow().label;
 
-  if (mode === "settings") {
+const App = () => {
+  const { uiState, level } = useVoiceBox();
+
+  if (windowLabel === "main") {
     return (
       <div className="flex flex-col h-screen bg-zinc-900 text-zinc-100 rounded-lg overflow-hidden">
         <TitleBar />

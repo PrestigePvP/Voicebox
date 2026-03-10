@@ -4,12 +4,25 @@ import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useConfig, type Mode } from "../hooks/use-config";
 
-const schema = z.object({
-  mode: z.enum(["cloud", "local"]),
+const cloudSchema = z.object({
+  mode: z.literal("cloud"),
   hotkey: z.string().min(1, "Hotkey is required"),
   workerUrl: z.string().min(1, "Worker URL is required"),
-  token: z.string().min(1, "Auth token is required"),
+  cloudToken: z.string().min(1, "Auth token is required"),
+  serverUrl: z.string(),
+  localToken: z.string(),
 });
+
+const localSchema = z.object({
+  mode: z.literal("local"),
+  hotkey: z.string().min(1, "Hotkey is required"),
+  workerUrl: z.string(),
+  cloudToken: z.string(),
+  serverUrl: z.string().min(1, "Server URL is required"),
+  localToken: z.string(),
+});
+
+const schema = z.discriminatedUnion("mode", [cloudSchema, localSchema]);
 
 type FormValues = z.infer<typeof schema>;
 
@@ -29,7 +42,9 @@ const SettingsForm = () => {
       mode: "cloud",
       hotkey: "",
       workerUrl: "",
-      token: "",
+      cloudToken: "",
+      serverUrl: "",
+      localToken: "",
     },
   });
 
@@ -39,7 +54,9 @@ const SettingsForm = () => {
         mode: config.provider.mode,
         hotkey: config.hotkey.record,
         workerUrl: config.cloud.worker_url,
-        token: config.cloud.token,
+        cloudToken: config.cloud.token,
+        serverUrl: config.local.server_url,
+        localToken: config.local.token,
       });
     }
   }, [config, reset]);
@@ -57,7 +74,12 @@ const SettingsForm = () => {
       cloud: {
         ...config.cloud,
         worker_url: values.workerUrl,
-        token: values.token,
+        token: values.cloudToken,
+      },
+      local: {
+        ...config.local,
+        server_url: values.serverUrl,
+        token: values.localToken,
       },
     };
 
@@ -113,14 +135,14 @@ const SettingsForm = () => {
           <Field label="Worker URL" error={errors.workerUrl?.message}>
             <input
               {...register("workerUrl")}
-              placeholder="wss://voicebox.example.com/ws"
+              placeholder="https://voicebox.example.workers.dev"
               className="input"
             />
           </Field>
 
-          <Field label="Auth Token" error={errors.token?.message}>
+          <Field label="Auth Token" error={errors.cloudToken?.message}>
             <input
-              {...register("token")}
+              {...register("cloudToken")}
               type="password"
               placeholder="••••••••"
               className="input"
@@ -132,9 +154,23 @@ const SettingsForm = () => {
       {mode === "local" && (
         <div className="flex flex-col gap-4">
           <h2 className="text-lg font-semibold text-zinc-100">Local</h2>
-          <p className="text-sm text-zinc-500">
-            Local provider support is coming soon.
-          </p>
+
+          <Field label="Server URL" error={errors.serverUrl?.message}>
+            <input
+              {...register("serverUrl")}
+              placeholder="http://192.168.1.183:9090"
+              className="input"
+            />
+          </Field>
+
+          <Field label="Auth Token (optional)">
+            <input
+              {...register("localToken")}
+              type="password"
+              placeholder="••••••••"
+              className="input"
+            />
+          </Field>
         </div>
       )}
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 type Mode = "cloud" | "local";
 
@@ -13,9 +14,8 @@ interface Config {
     token: string;
   };
   local: {
-    stt_endpoint: string;
-    formatter_endpoint: string;
-    formatter_model: string;
+    server_url: string;
+    token: string;
   };
   audio: {
     sample_rate: number;
@@ -23,20 +23,6 @@ interface Config {
     chunk_size: number;
   };
   hotkey: { record: string };
-}
-
-declare global {
-  interface Window {
-    go: {
-      main: {
-        App: {
-          GetConfig: () => Promise<Config>;
-          SaveConfig: (cfg: Config) => Promise<void>;
-          GetConfigPath: () => Promise<string>;
-        };
-      };
-    };
-  }
 }
 
 export type { Config, Mode };
@@ -48,8 +34,8 @@ export const useConfig = () => {
 
   useEffect(() => {
     Promise.all([
-      window.go.main.App.GetConfig(),
-      window.go.main.App.GetConfigPath(),
+      invoke<Config>("get_config"),
+      invoke<string>("get_config_path"),
     ]).then(([cfg, path]) => {
       setConfig(cfg);
       setConfigPath(path);
@@ -58,7 +44,7 @@ export const useConfig = () => {
   }, []);
 
   const save = useCallback(async (cfg: Config) => {
-    await window.go.main.App.SaveConfig(cfg);
+    await invoke("save_config", { cfg });
     setConfig(cfg);
   }, []);
 

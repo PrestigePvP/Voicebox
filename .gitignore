@@ -1,11 +1,12 @@
 # Binaries
 dist/
-build/
 voicebox
 voicebox.exe
+server/voicebox-server
 
 # Config (contains secrets)
 voicebox.toml
+voicebox.json
 .env
 .dev.vars
 
@@ -21,8 +22,8 @@ frontend/dist
 # Build artifacts
 frontend/package.json.md5
 
+# Tauri / Rust
+src-tauri/target/
+
 # OS
 .DS_Store
-
-# Wails
-wailsjs/

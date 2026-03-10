@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/json_schemas/tauri-v2.json",
+  "productName": "VoiceBox",
+  "version": "0.1.0",
+  "identifier": "com.prestigepvp.voicebox",
+  "build": {
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "export PATH=\"$HOME/.nvm/versions/node/v22.17.0/bin:$PATH\" && cd ../frontend && pnpm dev",
+    "beforeBuildCommand": "export PATH=\"$HOME/.nvm/versions/node/v22.17.0/bin:$PATH\" && cd ../frontend && pnpm build"
+  },
+  "app": {
+    "macOSPrivateApi": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "VoiceBox",
+        "width": 700,
+        "height": 450,
+        "decorations": false,
+        "center": true,
+        "visible": true,
+        "transparent": true,
+        "hiddenTitle": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {}
+}

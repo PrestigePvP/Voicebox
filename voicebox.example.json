@@ -1,0 +1,25 @@
+{
+  "provider": {
+    "mode": "cloud"
+  },
+  "cloud": {
+    "account_id": "",
+    "api_token": "",
+    "stt_model": "@cf/openai/whisper-large-v3-turbo",
+    "formatter_model": "@cf/ibm-granite/granite-4.0-h-micro",
+    "worker_url": "https://voicebox.example.workers.dev",
+    "token": ""
+  },
+  "local": {
+    "server_url": "http://192.168.1.183:9090",
+    "token": ""
+  },
+  "audio": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "chunk_size": 4096
+  },
+  "hotkey": {
+    "record": "ctrl+cmd"
+  }
+}

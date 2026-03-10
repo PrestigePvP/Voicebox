@@ -1,22 +1,21 @@
 ## Overview
 
-VoiceBox is a voice-to-text pipeline with a Wails v2 desktop app (Go + React frontend) and a Cloudflare Worker cloud backend. Press a hotkey to record speech. Audio is captured natively in Go via miniaudio, streamed via Go WebSocket client to a Cloudflare Worker that runs Whisper STT then LLM formatting. The result is copied to clipboard and auto-pasted into the originating app.
+VoiceBox is a voice-to-text pipeline with a Tauri v2 desktop app (Rust + React frontend) and a Cloudflare Worker cloud backend. Press a hotkey to record speech. Audio is captured natively in Rust via cpal, streamed via tokio-tungstenite WebSocket client to a Cloudflare Worker that runs Whisper STT then LLM formatting. The result is copied to clipboard and auto-pasted into the originating app.
 
-Local backend support (faster-whisper + Ollama) is planned for Phase 2. Provider stubs exist at `internal/stt/` and `internal/formatter/`.
+Local backend support (faster-whisper + Ollama) is available via the `server/` directory (separate Go binary).
 
 ## Commands
 
-### Wails (root directory)
-- `wails dev` - run dev server (Go + Vite hot reload)
-- `wails build` - build standalone binary
-- `go vet github.com/PrestigePvP/voicebox github.com/PrestigePvP/voicebox/internal/...` - lint Go code
-- `go test github.com/PrestigePvP/voicebox/internal/...` - run Go tests
-- Frontend must be built (`pnpm build` in `frontend/`) before `go build` due to `//go:embed all:frontend/dist`
+### Tauri (root directory)
+- `pnpm tauri dev` - run dev server (Rust + Vite hot reload)
+- `pnpm tauri build` - build standalone `.app` bundle
+- `cargo clippy` - lint Rust code (run from `src-tauri/`)
+- `cargo test` - run Rust tests (run from `src-tauri/`)
 
 ### Frontend (`frontend/` directory)
 - `pnpm install` - install dependencies
 - `pnpm build` - production build
-- `pnpm dev` - Vite dev server (used by `wails dev`)
+- `pnpm dev` - Vite dev server (used by `pnpm tauri dev`)
 
 ### Cloudflare Worker (`worker/` directory)
 - `pnpm install` - install dependencies
@@ -24,41 +23,41 @@ Local backend support (faster-whisper + Ollama) is planned for Phase 2. Provider
 - `pnpm deploy` - deploy to Cloudflare
 - `pnpm lint` - type-check with tsc
 
+### Local Server (`server/` directory)
+- `go run .` - run local server (faster-whisper + Ollama)
+
 ## Architecture
 
-### Go Backend
-- **`main.go`** - Wails entrypoint. Configures window (700×450, frameless, visible on start), app menu, and binds App struct.
-- **`app.go`** - App struct with `startup`/`shutdown` lifecycle, hotkey-driven recording orchestration, audio capture, WebSocket pipeline, clipboard copy, auto-paste, and window mode switching.
-- **`window_darwin.go`** / **`window_other.go`** - Platform-specific window management: overlay (top-center, 160×48, floating), settings (centered, 700×450, normal level), dock click handler.
-- **`internal/audio/`** - Audio capture using `malgo` (miniaudio Go bindings). Records PCM s16le at configured sample rate. Emits fixed-size chunks via channel. Also emits RMS level via callback.
-- **`internal/pipeline/`** - Go WebSocket client. Connects to Worker, sends `configure` (audio params + focus context), streams PCM chunks, sends `audio_end`, receives transcription result.
-- **`internal/hotkey/`** - `ParseHotkey` and `RegisterHotkey` using `golang.design/x/hotkey` for system-wide hotkey registration.
-- **`internal/config/`** - TOML config loading with defaults. Searches `~/.config/voicebox/voicebox.toml`, then next to binary, then `./voicebox.toml`. Also supports `Save`.
-- **`internal/accessibility/`** - macOS AX API + CGEvent: captures focused element context (app name, bundle ID, PID, role, title, placeholder, value) before recording starts; `PasteIntoApp` reactivates the app and simulates Cmd+V.
-- **`internal/stt/`** - STT provider interface + stubs (CloudProvider, LocalProvider).
-- **`internal/formatter/`** - Formatter provider interface + stubs (CloudProvider, LocalProvider).
+### Rust Backend (`src-tauri/src/`)
+- **`main.rs`** - Binary entrypoint, calls `lib::run()`.
+- **`lib.rs`** - Tauri setup: app state management, tray icon, multi-window (settings + overlay), hotkey registration, recording orchestration (hotkey down/up → audio capture → pipeline → clipboard → paste), IPC commands (`get_config`, `save_config`, `get_config_path`).
+- **`config.rs`** - JSON config load/save/defaults. Searches `~/.config/voicebox/voicebox.json`, then next to executable, then `./voicebox.json`. Auto-migrates existing TOML configs to JSON.
+- **`audio.rs`** - Audio capture using `cpal`. Records PCM s16le at configured sample rate. Runs on dedicated thread (cpal::Stream is !Send). Emits fixed-size chunks via tokio mpsc channel. Emits RMS level via Tauri events (~30fps).
+- **`pipeline.rs`** - Async WebSocket client via `tokio-tungstenite`. Connects to Worker/server, sends `configure` (audio params + focus context), streams PCM chunks, sends `audio_end`, receives transcription result. Spawns sender/receiver tasks.
+- **`hotkey.rs`** - Modifier-only hotkey via CGEventTap (macOS). Parses combo strings ("ctrl+cmd") to modifier bitmask. Runs CFRunLoop on dedicated thread. Press/release callbacks for hold-to-record.
+- **`accessibility.rs`** - macOS AX API via raw objc runtime: captures focused element context (app name, bundle ID, PID, role, title, placeholder, value). CGEvent Cmd+V simulation for auto-paste.
 
 ### Frontend (React + TypeScript + Tailwind)
-- **`frontend/src/App.tsx`** - Top-level component. Routes between two modes: `"settings"` (full settings UI) and `"overlay"` (compact recording widget).
-- **`frontend/src/components/settings-form.tsx`** - Settings form (react-hook-form + zod). Reads/writes config via `GetConfig`/`SaveConfig`/`GetConfigPath` Wails bindings.
-- **`frontend/src/components/title-bar.tsx`** - Frameless title bar with drag region and window controls.
-- **`frontend/src/hooks/use-voicebox.ts`** - Listens for `voicebox:state`, `voicebox:mode`, and `voicebox:level` events from Go. Provides `uiState`, `mode`, and `level` to the UI.
-- **`frontend/src/hooks/use-config.ts`** - Calls `GetConfig`/`SaveConfig`/`GetConfigPath` Wails bindings to load and persist config.
+- **`frontend/src/App.tsx`** - Top-level component. Uses window label to route: `"main"` → settings UI, `"overlay"` → compact recording widget.
+- **`frontend/src/components/settings-form.tsx`** - Settings form (react-hook-form + zod). Reads/writes config via Tauri `invoke`.
+- **`frontend/src/components/title-bar.tsx`** - Frameless title bar with drag region (`data-tauri-drag-region`) and close button.
+- **`frontend/src/hooks/use-voicebox.ts`** - Listens for `voicebox:state` and `voicebox:level` events from Rust via `@tauri-apps/api/event`. Provides `uiState` and `level` to the UI.
+- **`frontend/src/hooks/use-config.ts`** - Calls `get_config`/`save_config`/`get_config_path` via Tauri `invoke`.
 
 ### Cloud Backend
 - **`worker/`** - Cloudflare Worker with Durable Object. WebSocket endpoint at `/ws` that accumulates PCM audio, wraps as WAV, runs Whisper → LLM, returns formatted text.
 
 ## Data Flow
 
-1. User presses hotkey → Go captures focus context via AX API (`GetFocusContext`)
-2. Go starts native audio capture (malgo/miniaudio) → PCM chunks + RMS level flow to channels
-3. Go switches window to overlay mode (160×48, top-center), emits `voicebox:mode` → `"overlay"` and `voicebox:state` → `"recording"`
-4. Go opens WebSocket to Worker, sends `configure` (audio params + focus context), streams PCM chunks
-5. Go emits `voicebox:level` each chunk for the VoiceMeter UI
-6. User releases hotkey → Go `onHotkeyUp` stops capture, closes channel, emits `"processing"` state
+1. User presses hotkey → Rust captures focus context via AX API (`get_focus_context`)
+2. Rust starts native audio capture (cpal on dedicated thread) → PCM chunks + RMS level
+3. Rust shows overlay window (160×48, top-center, always-on-top), emits `voicebox:state` → `"recording"`
+4. Rust opens WebSocket to Worker, sends `configure` (audio params + focus context), streams PCM chunks
+5. Rust emits `voicebox:level` each chunk for the VoiceMeter UI
+6. User releases hotkey → Rust `on_hotkey_up` stops capture, closes channel, emits `"processing"` state
 7. Pipeline sends `audio_end`, waits for server to transcribe + format
-8. Go copies result to clipboard (`pbcopy`), then calls `PasteIntoApp(pid)` to simulate Cmd+V in the original app
-9. Go emits `"copied"` state, waits 1.5s, hides window, emits `"idle"`
+8. Rust copies result to clipboard (`pbcopy`), then calls `paste_into_app(pid)` to simulate Cmd+V
+9. Rust emits `"copied"` state, waits 1.5s, hides overlay, emits `"idle"`
 
 ## Worker WebSocket Protocol
 
@@ -71,40 +70,39 @@ Client connects to `GET /ws` with `Authorization: Bearer <token>` header.
 
 ## Window Behavior
 
-App starts visible in settings mode (700×450, centered). On recording start, window switches to overlay mode (160×48, top-center, floating). After result is pasted, the overlay hides and returns to hidden state (reopened via dock click or menu).
+Two separate windows managed by Tauri:
+- **Settings window** (`"main"`): 700×450, frameless, centered, visible on start. Close hides (app stays in tray).
+- **Overlay window** (`"overlay"`): 160×48, transparent, always-on-top, no decorations, skip taskbar. Shown during recording, hidden after result.
 
 Settings can be opened via:
-- App menu > Recording > Show Settings
-- Clicking the dock icon (when window is hidden)
+- System tray icon click
+- Tray menu > Show Settings
 
 ## Key Dependencies
 
-### Go
-- `github.com/wailsapp/wails/v2` - desktop app framework (WebView + Go)
-- `github.com/gen2brain/malgo` - miniaudio Go bindings for native audio capture
-- `github.com/gorilla/websocket` - WebSocket client for Worker communication
-- `github.com/BurntSushi/toml` - config parsing
-- `golang.design/x/hotkey` - global hotkey registration
+### Rust
+- `tauri` v2 - desktop app framework (multi-window, tray, IPC)
+- `cpal` - cross-platform audio capture
+- `tokio-tungstenite` - async WebSocket client
+- `serde` / `serde_json` - config serialization
+- `core-graphics` / `core-foundation` - macOS CGEventTap, CGEvent (hotkey + paste)
+- `tauri-plugin-clipboard-manager` - clipboard access
 
 ### Frontend
 - React, Tailwind CSS v4, Vite
 - react-hook-form, zod, @hookform/resolvers
-- `@wailsapp/runtime` - Wails JS runtime (events + bindings)
+- `@tauri-apps/api` v2 - Tauri frontend IPC (events, invoke, window)
 
 ### Worker
-- Cloudflare Workers AI (`@cf/openai/whisper-large-v3-turbo`, `@cf/qwen/qwen3-30b-a3b-fp8`)
+- Cloudflare Workers AI (`@cf/openai/whisper-large-v3-turbo`)
 - Durable Objects with hibernation WebSocket API
 
 ## Conventions
 
-- Wails v2 menu keys API: `keys.Combo("r", keys.ControlKey, keys.OptionOrAltKey)`, `keys.CmdOrCtrl("q")` — not `keys.CombKey`
-- Wails v2 has no native system tray support
-- Go: standard library preferred where possible
 - TypeScript in `worker/`: Cloudflare Workers patterns, typed with `@cloudflare/workers-types`
 - TypeScript in `frontend/`: React + Tailwind v4, functional components, hooks pattern
-- Config file: `~/.config/voicebox/voicebox.toml` (primary), also checked next to binary and at `./voicebox.toml`
-- Provider pattern: interfaces in `internal/stt/` and `internal/formatter/`, with cloud/local implementations
+- Config file: `~/.config/voicebox/voicebox.json` (primary), also checked next to binary and at `./voicebox.json`
 - Per-recording WebSocket: fresh connection per recording session, no persistent connections
 - Audio: 16kHz, mono, PCM signed 16-bit LE, 4096-byte chunks
 - Clipboard: uses `pbcopy` (macOS); auto-paste via CGEvent Cmd+V simulation
-- macOS accessibility permission required for full focus context capture and auto-paste
+- macOS accessibility permission required for full focus context capture, hotkey, and auto-paste
