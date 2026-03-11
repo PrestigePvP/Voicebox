@@ -9,6 +9,8 @@ pub struct FocusContext {
     pub placeholder: String,
     pub value: String,
     pub pid: i32,
+    #[serde(skip)]
+    pub icon_base64: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -88,7 +90,7 @@ pub fn get_focus_context() -> FocusContext {
         }
     }
 
-    let (app_name, bundle_id, pid) = unsafe {
+    let (app_name, bundle_id, pid, icon_base64) = unsafe {
         #[link(name = "objc", kind = "dylib")]
         extern "C" {
             fn objc_getClass(name: *const c_char) -> *mut c_void;
@@ -133,13 +135,17 @@ pub fn get_focus_context() -> FocusContext {
             String::new()
         };
 
-        (name, bundle, pid)
+        // Capture app icon while we have front_app
+        let icon_b64 = extract_app_icon(front_app);
+
+        (name, bundle, pid, icon_b64)
     };
 
     let mut ctx = FocusContext {
         app_name,
         bundle_id,
         pid,
+        icon_base64,
         ..Default::default()
     };
 
@@ -175,80 +181,109 @@ pub fn get_focus_context() -> FocusContext {
     ctx
 }
 
+/// Extract the app icon by reading the .icns file directly from the app bundle.
+/// This avoids AppKit (NSBitmapImageRep) which must run on the main thread.
 #[cfg(target_os = "macos")]
-pub fn get_app_icon(pid: i32) -> Option<String> {
-    if pid <= 0 {
-        return None;
-    }
-
+unsafe fn extract_app_icon(front_app: *mut std::ffi::c_void) -> Option<String> {
     use std::ffi::{c_char, c_void};
 
-    #[link(name = "objc", kind = "dylib")]
     extern "C" {
-        fn objc_getClass(name: *const c_char) -> *mut c_void;
         fn sel_registerName(name: *const c_char) -> *mut c_void;
         fn objc_msgSend(obj: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
     }
 
-    unsafe {
-        let app_class = objc_getClass(c"NSRunningApplication".as_ptr());
-        let pid_sel = sel_registerName(c"runningApplicationWithProcessIdentifier:".as_ptr());
-        let app = objc_msgSend(app_class, pid_sel, pid);
-        if app.is_null() {
-            return None;
-        }
-
-        let icon = objc_msgSend(app, sel_registerName(c"icon".as_ptr()));
-        if icon.is_null() {
-            return None;
-        }
-
-        let tiff_data = objc_msgSend(icon, sel_registerName(c"TIFFRepresentation".as_ptr()));
-        if tiff_data.is_null() {
-            return None;
-        }
-
-        let bitmap_class = objc_getClass(c"NSBitmapImageRep".as_ptr());
-        let bitmap = objc_msgSend(
-            bitmap_class,
-            sel_registerName(c"imageRepWithData:".as_ptr()),
-            tiff_data,
-        );
-        if bitmap.is_null() {
-            return None;
-        }
-
-        let dict_class = objc_getClass(c"NSDictionary".as_ptr());
-        let empty_dict = objc_msgSend(dict_class, sel_registerName(c"dictionary".as_ptr()));
-
-        // NSBitmapImageFileTypePNG = 4
-        let png_data = objc_msgSend(
-            bitmap,
-            sel_registerName(c"representationUsingType:properties:".as_ptr()),
-            4usize,
-            empty_dict,
-        );
-        if png_data.is_null() {
-            return None;
-        }
-
-        let length = objc_msgSend(png_data, sel_registerName(c"length".as_ptr())) as usize;
-        let bytes_ptr =
-            objc_msgSend(png_data, sel_registerName(c"bytes".as_ptr())) as *const u8;
-
-        if bytes_ptr.is_null() || length == 0 {
-            return None;
-        }
-
-        let slice = std::slice::from_raw_parts(bytes_ptr, length);
-        use base64::Engine;
-        Some(base64::engine::general_purpose::STANDARD.encode(slice))
+    // Get bundleURL.path from the running application
+    let bundle_url = objc_msgSend(front_app, sel_registerName(c"bundleURL".as_ptr()));
+    if bundle_url.is_null() {
+        return None;
     }
+    let path_nsstr = objc_msgSend(bundle_url, sel_registerName(c"path".as_ptr()));
+    if path_nsstr.is_null() {
+        return None;
+    }
+    let utf8 = objc_msgSend(path_nsstr, sel_registerName(c"UTF8String".as_ptr())) as *const i8;
+    if utf8.is_null() {
+        return None;
+    }
+    let bundle_path = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
+
+    // Read Info.plist to find the icon file name
+    let plist_path = format!("{}/Contents/Info.plist", bundle_path);
+    let plist_data = std::fs::read(&plist_path).ok()?;
+    let plist_str = String::from_utf8_lossy(&plist_data);
+
+    // Parse icon filename from the plist (look for CFBundleIconFile)
+    let icon_name = extract_plist_value(&plist_str, "CFBundleIconFile")?;
+    let icon_name = if icon_name.ends_with(".icns") {
+        icon_name.to_string()
+    } else {
+        format!("{}.icns", icon_name)
+    };
+
+    let icon_path = format!("{}/Contents/Resources/{}", bundle_path, icon_name);
+    let icon_data = std::fs::read(&icon_path).ok()?;
+
+    // Extract a PNG from the ICNS container
+    let png = extract_png_from_icns(&icon_data)?;
+
+    log::info!("extract_app_icon: extracted {}b PNG from {}", png.len(), icon_name);
+    use base64::Engine;
+    Some(base64::engine::general_purpose::STANDARD.encode(&png))
 }
 
-#[cfg(not(target_os = "macos"))]
-pub fn get_app_icon(_pid: i32) -> Option<String> {
-    None
+fn extract_plist_value<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
+    let key_tag = format!("<key>{}</key>", key);
+    let pos = plist.find(&key_tag)?;
+    let after_key = &plist[pos + key_tag.len()..];
+    let start = after_key.find("<string>")? + 8;
+    let end = after_key[start..].find("</string>")?;
+    Some(&after_key[start..start + end])
+}
+
+const PNG_MAGIC: &[u8] = &[0x89, 0x50, 0x4E, 0x47];
+
+fn extract_png_from_icns(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 8 || &data[..4] != b"icns" {
+        return None;
+    }
+
+    // Prefer smaller icons first (32x32@2x, 128x128) to keep data small
+    let preferred = [b"ic12", b"ic07", b"ic13", b"ic08", b"ic14", b"ic09", b"ic10"];
+    let mut fallback: Option<Vec<u8>> = None;
+
+    let total = u32::from_be_bytes(data[4..8].try_into().ok()?) as usize;
+    let mut pos = 8;
+    while pos + 8 <= total && pos + 8 <= data.len() {
+        let entry_type = &data[pos..pos + 4];
+        let entry_len = u32::from_be_bytes(data[pos + 4..pos + 8].try_into().ok()?) as usize;
+        if entry_len < 8 || pos + entry_len > data.len() {
+            break;
+        }
+
+        let entry_data = &data[pos + 8..pos + entry_len];
+
+        // Check if this entry contains PNG data
+        if entry_data.len() >= 4 && &entry_data[..4] == PNG_MAGIC {
+            for (priority, pref) in preferred.iter().enumerate() {
+                if entry_type == *pref {
+                    if priority == 0 {
+                        return Some(entry_data.to_vec());
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(entry_data.to_vec());
+                    }
+                    break;
+                }
+            }
+            if fallback.is_none() {
+                fallback = Some(entry_data.to_vec());
+            }
+        }
+
+        pos += entry_len;
+    }
+
+    fallback
 }
 
 #[cfg(target_os = "macos")]

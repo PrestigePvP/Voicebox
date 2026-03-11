@@ -99,8 +99,9 @@ fn on_hotkey_down(app_handle: AppHandle) {
 
     let focus_ctx = accessibility::get_focus_context();
 
-    if let Some(icon_b64) = accessibility::get_app_icon(focus_ctx.pid) {
-        let _ = app_handle.emit("voicebox:icon", icon_b64);
+    if let Some(ref icon_b64) = focus_ctx.icon_base64 {
+        log::info!("Emitting app icon ({}b base64)", icon_b64.len());
+        let _ = app_handle.emit("voicebox:icon", icon_b64.clone());
     }
 
     let (capture_handle, chunk_rx) = match audio::start_capture(
