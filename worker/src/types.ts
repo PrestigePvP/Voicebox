@@ -1,13 +1,14 @@
 export type ErrorCode = "auth_failed" | "audio_too_large" | "stt_failed" | "format_failed" | "internal";
 
 export type ClientMessage =
-  | { type: "configure"; audio?: Partial<AudioConfig>; context?: Partial<FocusContext> }
+  | { type: "configure"; audio?: Partial<AudioConfig>; context?: Partial<FocusContext>; streamingStt?: boolean }
   | { type: "audio_end" }
   | { type: "cancel" };
 
 export type ServerMessage =
   | { type: "ready" }
   | { type: "processing"; stage: "stt" | "format" }
+  | { type: "partial"; text: string }
   | { type: "result"; raw: string; formatted: string }
   | { type: "error"; code: ErrorCode; message: string };
 

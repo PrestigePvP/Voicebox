@@ -50,6 +50,8 @@ struct ServerMessage {
     #[serde(default)]
     stage: String,
     #[serde(default)]
+    text: String,
+    #[serde(default)]
     raw: String,
     #[serde(default)]
     formatted: String,
@@ -59,16 +61,20 @@ struct ServerMessage {
     message: String,
 }
 
-pub async fn run<F>(
+#[allow(clippy::too_many_arguments)]
+pub async fn run<F, G>(
     worker_url: &str,
     token: &str,
     params: AudioParams,
     focus: FocusContext,
+    streaming_stt: bool,
     mut chunk_rx: mpsc::Receiver<Vec<u8>>,
     on_stage: F,
+    on_partial: G,
 ) -> Result<PipelineResult, String>
 where
     F: Fn(&str) + Send + 'static,
+    G: Fn(&str) + Send + 'static,
 {
     let ws_url = worker_url
         .replace("https://", "wss://")
@@ -89,9 +95,11 @@ where
         .headers_mut()
         .insert("Authorization", format!("Bearer {}", token).parse().unwrap());
 
+    let connect_start = std::time::Instant::now();
     let (ws_stream, _) = tokio_tungstenite::connect_async(request)
         .await
         .map_err(|e| format!("WebSocket connect: {}", e))?;
+    log::info!("[pipeline] ws connect: {}ms", connect_start.elapsed().as_millis());
 
     let (mut write, mut read) = ws_stream.split();
 
@@ -115,19 +123,27 @@ where
         "type": "configure",
         "audio": params,
         "context": focus,
+        "streamingStt": streaming_stt,
     });
     write
         .send(Message::Text(configure.to_string().into()))
         .await
         .map_err(|e| format!("Sending configure: {}", e))?;
 
+    let pipeline_start = std::time::Instant::now();
+
     // Spawn sender task
     let send_handle = tokio::spawn(async move {
+        let mut chunks_sent = 0u32;
+        let mut bytes_sent = 0usize;
         while let Some(chunk) = chunk_rx.recv().await {
+            bytes_sent += chunk.len();
+            chunks_sent += 1;
             if write.send(Message::Binary(chunk.into())).await.is_err() {
                 break;
             }
         }
+        log::info!("[pipeline] sender done: {} chunks, {} bytes", chunks_sent, bytes_sent);
         let end = serde_json::json!({"type": "audio_end"});
         let _ = write.send(Message::Text(end.to_string().into())).await;
         write
@@ -150,8 +166,16 @@ where
         };
 
         match server_msg.msg_type.as_str() {
-            "processing" => on_stage(&server_msg.stage),
+            "processing" => {
+                log::info!("[pipeline] server: processing/{} at +{}ms", server_msg.stage, pipeline_start.elapsed().as_millis());
+                on_stage(&server_msg.stage);
+            }
+            "partial" => {
+                log::info!("[pipeline] server: partial at +{}ms: \"{}\"", pipeline_start.elapsed().as_millis(), &server_msg.text.chars().take(80).collect::<String>());
+                on_partial(&server_msg.text);
+            }
             "result" => {
+                log::info!("[pipeline] server: result at +{}ms", pipeline_start.elapsed().as_millis());
                 let _ = send_handle.await;
                 return Ok(PipelineResult {
                     raw: server_msg.raw,

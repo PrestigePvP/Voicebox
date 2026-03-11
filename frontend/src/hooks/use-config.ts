@@ -23,6 +23,8 @@ interface Config {
     chunk_size: number;
   };
   hotkey: { record: string };
+  beta: { streaming_stt: boolean };
+  overlay_position: string;
 }
 
 export type { Config, Mode };

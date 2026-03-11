@@ -3,23 +3,35 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useConfig, type Mode } from "../hooks/use-config";
+import { cn } from "../lib/utils";
+
+const overlayPositions = [
+  { value: "top_center", label: "Top Center" },
+  { value: "bottom_left", label: "Bottom Left" },
+  { value: "bottom_center", label: "Bottom Center" },
+  { value: "bottom_right", label: "Bottom Right" },
+] as const;
 
 const cloudSchema = z.object({
   mode: z.literal("cloud"),
   hotkey: z.string().min(1, "Hotkey is required"),
+  overlayPosition: z.string(),
   workerUrl: z.string().min(1, "Worker URL is required"),
   cloudToken: z.string().min(1, "Auth token is required"),
   serverUrl: z.string(),
   localToken: z.string(),
+  streamingStt: z.boolean(),
 });
 
 const localSchema = z.object({
   mode: z.literal("local"),
   hotkey: z.string().min(1, "Hotkey is required"),
+  overlayPosition: z.string(),
   workerUrl: z.string(),
   cloudToken: z.string(),
   serverUrl: z.string().min(1, "Server URL is required"),
   localToken: z.string(),
+  streamingStt: z.boolean(),
 });
 
 const schema = z.discriminatedUnion("mode", [cloudSchema, localSchema]);
@@ -41,10 +53,12 @@ const SettingsForm = () => {
     defaultValues: {
       mode: "cloud",
       hotkey: "",
+      overlayPosition: "top_center",
       workerUrl: "",
       cloudToken: "",
       serverUrl: "",
       localToken: "",
+      streamingStt: false,
     },
   });
 
@@ -53,10 +67,12 @@ const SettingsForm = () => {
       reset({
         mode: config.provider.mode,
         hotkey: config.hotkey.record,
+        overlayPosition: config.overlay_position ?? "top_center",
         workerUrl: config.cloud.worker_url,
         cloudToken: config.cloud.token,
         serverUrl: config.local.server_url,
         localToken: config.local.token,
+        streamingStt: config.beta?.streaming_stt ?? false,
       });
     }
   }, [config, reset]);
@@ -71,6 +87,7 @@ const SettingsForm = () => {
       ...config,
       provider: { mode: values.mode as Mode },
       hotkey: { record: values.hotkey },
+      overlay_position: values.overlayPosition,
       cloud: {
         ...config.cloud,
         worker_url: values.workerUrl,
@@ -80,6 +97,9 @@ const SettingsForm = () => {
         ...config.local,
         server_url: values.serverUrl,
         token: values.localToken,
+      },
+      beta: {
+        streaming_stt: values.streamingStt,
       },
     };
 
@@ -114,13 +134,21 @@ const SettingsForm = () => {
           />
         </Field>
 
+        <Field label="Overlay Position">
+          <select {...register("overlayPosition")} className="input">
+            {overlayPositions.map((p) => (
+              <option key={p.value} value={p.value}>{p.label}</option>
+            ))}
+          </select>
+        </Field>
+
         <Field label="Provider">
           <div className="flex gap-2">
-            <label className={`radio-card ${mode === "cloud" ? "radio-card-active" : ""}`}>
+            <label className={cn("radio-card", mode === "cloud" && "radio-card-active")}>
               <input type="radio" value="cloud" {...register("mode")} className="sr-only" />
               <span>Cloud</span>
             </label>
-            <label className={`radio-card ${mode === "local" ? "radio-card-active" : ""}`}>
+            <label className={cn("radio-card", mode === "local" && "radio-card-active")}>
               <input type="radio" value="local" {...register("mode")} className="sr-only" />
               <span>Local</span>
             </label>
@@ -173,6 +201,18 @@ const SettingsForm = () => {
           </Field>
         </div>
       )}
+
+      <div className="flex flex-col gap-4">
+        <h2 className="text-lg font-semibold text-zinc-100">Beta</h2>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            {...register("streamingStt")}
+            className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-zinc-900"
+          />
+          <span className="text-sm text-zinc-400">Live transcription preview</span>
+        </label>
+      </div>
 
       <div className="flex items-center gap-3 mt-auto pt-4 border-t border-zinc-800">
         <button

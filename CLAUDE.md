@@ -7,15 +7,15 @@ Local backend support (faster-whisper + Ollama) is available via the `server/` d
 ## Commands
 
 ### Tauri (root directory)
-- `pnpm tauri dev` - run dev server (Rust + Vite hot reload)
-- `pnpm tauri build` - build standalone `.app` bundle
+- `cargo tauri dev` - run dev server (Rust + Vite hot reload)
+- `cargo tauri build` - build standalone `.app` bundle
 - `cargo clippy` - lint Rust code (run from `src-tauri/`)
 - `cargo test` - run Rust tests (run from `src-tauri/`)
 
 ### Frontend (`frontend/` directory)
 - `pnpm install` - install dependencies
 - `pnpm build` - production build
-- `pnpm dev` - Vite dev server (used by `pnpm tauri dev`)
+- `pnpm dev` - Vite dev server (used by `cargo tauri dev`)
 
 ### Cloudflare Worker (`worker/` directory)
 - `pnpm install` - install dependencies

@@ -9,6 +9,14 @@ pub struct Config {
     pub local: LocalConfig,
     pub audio: AudioConfig,
     pub hotkey: HotkeyConfig,
+    #[serde(default)]
+    pub beta: BetaConfig,
+    #[serde(default = "default_overlay_position")]
+    pub overlay_position: String,
+}
+
+fn default_overlay_position() -> String {
+    "top_center".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +52,11 @@ pub struct HotkeyConfig {
     pub record: String,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BetaConfig {
+    pub streaming_stt: bool,
+}
+
 pub fn default_config() -> Config {
     Config {
         provider: ProviderConfig {
@@ -69,6 +82,8 @@ pub fn default_config() -> Config {
         hotkey: HotkeyConfig {
             record: "ctrl+cmd".into(),
         },
+        beta: BetaConfig::default(),
+        overlay_position: default_overlay_position(),
     }
 }
 

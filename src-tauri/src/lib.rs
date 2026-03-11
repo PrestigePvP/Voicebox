@@ -99,6 +99,10 @@ fn on_hotkey_down(app_handle: AppHandle) {
 
     let focus_ctx = accessibility::get_focus_context();
 
+    if let Some(icon_b64) = accessibility::get_app_icon(focus_ctx.pid) {
+        let _ = app_handle.emit("voicebox:icon", icon_b64);
+    }
+
     let (capture_handle, chunk_rx) = match audio::start_capture(
         config.audio.sample_rate,
         config.audio.channels,
@@ -172,7 +176,9 @@ async fn run_pipeline(
 (config.cloud.worker_url.clone(), config.cloud.token.clone())
     };
 
+    let streaming_stt = config.beta.streaming_stt;
     let app_stage = app.clone();
+    let app_partial = app.clone();
     let result = pipeline::run(
         &server_url,
         &token,
@@ -182,6 +188,7 @@ async fn run_pipeline(
             encoding: "pcm_s16le".into(),
         },
         pipeline::FocusContext::from(&focus_ctx),
+        streaming_stt,
         chunk_rx,
         move |stage| {
             let _ = app_stage.emit(
@@ -191,6 +198,9 @@ async fn run_pipeline(
                     "stage": stage,
                 }),
             );
+        },
+        move |text| {
+            let _ = app_partial.emit("voicebox:partial", text);
         },
     )
     .await;
@@ -250,15 +260,67 @@ fn write_clipboard(text: &str) -> Result<(), String> {
 
 fn show_overlay(app: &AppHandle) {
     if let Some(overlay) = app.get_webview_window("overlay") {
-        if let Ok(Some(monitor)) = overlay.primary_monitor() {
-            let screen = monitor.size();
-            let x = (screen.width as i32 - 160) / 2;
-            let _ = overlay.set_position(tauri::Position::Physical(
-                tauri::PhysicalPosition::new(x, 20),
+        let state = app.state::<Arc<Mutex<AppState>>>();
+        let position = state.lock().unwrap().config.overlay_position.clone();
+
+        let monitor = cursor_monitor(&overlay)
+            .or_else(|| overlay.primary_monitor().ok().flatten());
+
+        if let Some(monitor) = monitor {
+            let scale = monitor.scale_factor();
+            let pos = monitor.position();
+            let size = monitor.size();
+            let mon_x = pos.x as f64 / scale;
+            let mon_y = pos.y as f64 / scale;
+            let mon_w = size.width as f64 / scale;
+            let mon_h = size.height as f64 / scale;
+            let ov_w = 320.0;
+            let ov_h = 120.0;
+
+            let (x, y) = match position.as_str() {
+                "bottom_left" => (mon_x, mon_y + mon_h - ov_h),
+                "bottom_center" => (mon_x + (mon_w - ov_w) / 2.0, mon_y + mon_h - ov_h),
+                "bottom_right" => (mon_x + mon_w - ov_w, mon_y + mon_h - ov_h),
+                _ => (mon_x + (mon_w - ov_w) / 2.0, mon_y),
+            };
+
+            let _ = overlay.set_position(tauri::Position::Logical(
+                tauri::LogicalPosition::new(x, y),
             ));
         }
         let _ = overlay.show();
     }
+}
+
+#[cfg(target_os = "macos")]
+fn cursor_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).ok()?;
+    let event = CGEvent::new(source).ok()?;
+    let cursor = event.location();
+
+    let monitors = window.available_monitors().ok()?;
+    for monitor in monitors {
+        let scale = monitor.scale_factor();
+        let pos = monitor.position();
+        let size = monitor.size();
+        let x = pos.x as f64 / scale;
+        let y = pos.y as f64 / scale;
+        let w = size.width as f64 / scale;
+        let h = size.height as f64 / scale;
+
+        if cursor.x >= x && cursor.x < x + w && cursor.y >= y && cursor.y < y + h {
+            return Some(monitor);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cursor_monitor(_window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    None
 }
 
 fn hide_overlay(app: &AppHandle) {
@@ -357,7 +419,7 @@ pub fn run() {
                 WebviewUrl::App("index.html".into()),
             )
             .title("VoiceBox Overlay")
-            .inner_size(160.0, 48.0)
+            .inner_size(320.0, 120.0)
             .decorations(false)
             .transparent(true)
             .background_color(tauri::window::Color(0, 0, 0, 0))

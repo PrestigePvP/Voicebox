@@ -176,6 +176,82 @@ pub fn get_focus_context() -> FocusContext {
 }
 
 #[cfg(target_os = "macos")]
+pub fn get_app_icon(pid: i32) -> Option<String> {
+    if pid <= 0 {
+        return None;
+    }
+
+    use std::ffi::{c_char, c_void};
+
+    #[link(name = "objc", kind = "dylib")]
+    extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend(obj: *mut c_void, sel: *mut c_void, ...) -> *mut c_void;
+    }
+
+    unsafe {
+        let app_class = objc_getClass(c"NSRunningApplication".as_ptr());
+        let pid_sel = sel_registerName(c"runningApplicationWithProcessIdentifier:".as_ptr());
+        let app = objc_msgSend(app_class, pid_sel, pid);
+        if app.is_null() {
+            return None;
+        }
+
+        let icon = objc_msgSend(app, sel_registerName(c"icon".as_ptr()));
+        if icon.is_null() {
+            return None;
+        }
+
+        let tiff_data = objc_msgSend(icon, sel_registerName(c"TIFFRepresentation".as_ptr()));
+        if tiff_data.is_null() {
+            return None;
+        }
+
+        let bitmap_class = objc_getClass(c"NSBitmapImageRep".as_ptr());
+        let bitmap = objc_msgSend(
+            bitmap_class,
+            sel_registerName(c"imageRepWithData:".as_ptr()),
+            tiff_data,
+        );
+        if bitmap.is_null() {
+            return None;
+        }
+
+        let dict_class = objc_getClass(c"NSDictionary".as_ptr());
+        let empty_dict = objc_msgSend(dict_class, sel_registerName(c"dictionary".as_ptr()));
+
+        // NSBitmapImageFileTypePNG = 4
+        let png_data = objc_msgSend(
+            bitmap,
+            sel_registerName(c"representationUsingType:properties:".as_ptr()),
+            4usize,
+            empty_dict,
+        );
+        if png_data.is_null() {
+            return None;
+        }
+
+        let length = objc_msgSend(png_data, sel_registerName(c"length".as_ptr())) as usize;
+        let bytes_ptr =
+            objc_msgSend(png_data, sel_registerName(c"bytes".as_ptr())) as *const u8;
+
+        if bytes_ptr.is_null() || length == 0 {
+            return None;
+        }
+
+        let slice = std::slice::from_raw_parts(bytes_ptr, length);
+        use base64::Engine;
+        Some(base64::engine::general_purpose::STANDARD.encode(slice))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn get_app_icon(_pid: i32) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
 pub fn paste_into_app(pid: i32) {
     if pid <= 0 {
         return;
