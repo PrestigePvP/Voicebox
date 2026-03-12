@@ -19,19 +19,11 @@ const sendMessage = (ws: WebSocket, msg: ServerMessage) => {
   ws.send(JSON.stringify(msg));
 };
 
-type ChatCompletionResponse = { choices?: Array<{ message?: { content?: string } }> };
-
 const extractText = (
-  result: ChatCompletionResponse | string,
+  result: { response?: string } | string,
 ): string | null => {
-  if (typeof result === "string") {
-    return result;
-  }
-  const fullContent = result.choices
-    ?.map((choice) => choice.message?.content)
-    .filter(Boolean)
-    .join("\n");
-  return fullContent ?? null;
+  if (typeof result === "string") return result;
+  return result.response ?? null;
 };
 
 export class TranscriptionSession extends DurableObject<Env> {
@@ -222,8 +214,9 @@ export class TranscriptionSession extends DurableObject<Env> {
             { role: "system", content: buildSystemPrompt(this.focusContext) },
             { role: "user", content: buildUserMessage(this.committedText, this.focusContext) },
           ],
+          temperature: 0,
         },
-      ) as ChatCompletionResponse | string;
+      );
       const formatted = extractText(formatResult) ?? this.committedText;
       this.lastPartialFormatted = formatted;
       console.log(`[periodic-stt] format done in ${Date.now() - fmtStart}ms, total cycle ${Date.now() - t0}ms`);
@@ -343,8 +336,9 @@ export class TranscriptionSession extends DurableObject<Env> {
                 { role: "system", content: buildSystemPrompt(this.focusContext) },
                 { role: "user", content: buildUserMessage(tailRaw, this.focusContext) },
               ],
+              temperature: 0,
             },
-          ) as ChatCompletionResponse | string;
+          );
           const tailFormatted = extractText(tailResult) ?? tailRaw;
           formatted = `${this.checkpointFormatted} ${tailFormatted}`;
           console.log(`[processAudio] tail format done in ${Date.now() - fmtStart}ms`);
@@ -366,8 +360,9 @@ export class TranscriptionSession extends DurableObject<Env> {
               { role: "system", content: buildSystemPrompt(this.focusContext) },
               { role: "user", content: buildUserMessage(sttText, this.focusContext) },
             ],
+            temperature: 0,
           },
-        ) as ChatCompletionResponse | string;
+        );
         formatted = extractText(formatResult) ?? sttText;
         console.log(`[processAudio] format done in ${Date.now() - fmtStart}ms`);
       } catch (e) {
