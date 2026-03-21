@@ -26,6 +26,42 @@ const extractText = (
   return result.response ?? null;
 };
 
+const OVERLAP_CHUNKS = 4;
+
+// Find where `known` text ends within `full` transcription and return only the new portion.
+// Uses longest matching suffix of `known` words against prefixes of `full` words.
+const deduplicateText = (known: string, full: string): string => {
+  const knownWords = known.toLowerCase().split(/\s+/).filter(Boolean);
+  const fullWords = full.split(/\s+/).filter(Boolean);
+  const fullLower = fullWords.map((w) => w.toLowerCase());
+
+  if (knownWords.length === 0) return full;
+  if (fullWords.length === 0) return "";
+
+  // Try matching progressively shorter suffixes of known against the start of full
+  const maxCheck = Math.min(knownWords.length, fullLower.length);
+  let bestMatch = 0;
+
+  for (let suffixLen = 1; suffixLen <= maxCheck; suffixLen++) {
+    const suffix = knownWords.slice(-suffixLen);
+    let matches = true;
+    for (let j = 0; j < suffixLen; j++) {
+      if (suffix[j] !== fullLower[j]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) bestMatch = suffixLen;
+  }
+
+  if (bestMatch > 0) {
+    return fullWords.slice(bestMatch).join(" ");
+  }
+
+  // No overlap found — return full text as fallback
+  return full;
+};
+
 export class TranscriptionSession extends DurableObject<Env> {
   private audioChunks: Uint8Array[] = [];
   private totalBytes = 0;
@@ -41,7 +77,6 @@ export class TranscriptionSession extends DurableObject<Env> {
   private checkpointFormatted: string | null = null;
   private committedText = "";
   private lastProcessedChunk = 0;
-  private prevSegmentStart = 0;
 
   async fetch(_request: Request): Promise<Response> {
     const pair = new WebSocketPair();
@@ -131,7 +166,6 @@ export class TranscriptionSession extends DurableObject<Env> {
     this.checkpointFormatted = null;
     this.committedText = "";
     this.lastProcessedChunk = 0;
-    this.prevSegmentStart = 0;
     this.audioChunks = [];
     this.totalBytes = 0;
     this.focusContext = { ...DEFAULT_FOCUS_CONTEXT };
@@ -153,21 +187,16 @@ export class TranscriptionSession extends DurableObject<Env> {
     const currentChunkCount = this.audioChunks.length;
     if (currentChunkCount <= this.lastProcessedChunk || !this.activeWs) return;
 
-    // Include previous segment as context for Whisper (helps with word boundaries)
-    const contextStart = this.lastProcessedChunk > 0
-      ? Math.max(0, this.prevSegmentStart)
-      : 0;
-    const windowAudio = this.combineChunkRange(contextStart, currentChunkCount);
+    // Include a small overlap from the previous segment for Whisper context
+    const overlapStart = Math.max(0, this.lastProcessedChunk - OVERLAP_CHUNKS);
+    const windowAudio = this.combineChunkRange(overlapStart, currentChunkCount);
     const MIN_BYTES = 16000;
     if (windowAudio.byteLength < MIN_BYTES) return;
 
-    const contextBytes = contextStart < this.lastProcessedChunk
-      ? this.combineChunkRange(contextStart, this.lastProcessedChunk).byteLength
-      : 0;
-
+    const hasOverlap = overlapStart < this.lastProcessedChunk;
     const segSecs = (windowAudio.byteLength / (this.audioConfig.sampleRate * 2)).toFixed(1);
     const totalSecs = (this.totalBytes / (this.audioConfig.sampleRate * 2)).toFixed(1);
-    console.log(`[periodic-stt] window [${contextStart}..${currentChunkCount}] (context: ${contextBytes} bytes), ${windowAudio.byteLength} bytes (~${segSecs}s), total ~${totalSecs}s`);
+    console.log(`[periodic-stt] window [${overlapStart}..${currentChunkCount}] (overlap: ${hasOverlap ? this.lastProcessedChunk - overlapStart : 0} chunks), ${windowAudio.byteLength} bytes (~${segSecs}s), total ~${totalSecs}s`);
     const t0 = Date.now();
 
     const wavData = wrapPcmAsWav(windowAudio, this.audioConfig.sampleRate, this.audioConfig.channels, 16);
@@ -182,14 +211,11 @@ export class TranscriptionSession extends DurableObject<Env> {
       const windowText = sttResult.text.trim();
       console.log(`[periodic-stt] stt done in ${Date.now() - t0}ms: "${windowText.slice(0, 80)}"`);
 
-      // Extract only the new portion using proportional split based on audio duration
+      // Deduplicate: find where committed text overlaps with new transcription
       let newText: string;
-      if (contextBytes > 0 && windowAudio.byteLength > 0) {
-        const contextRatio = contextBytes / windowAudio.byteLength;
-        const words = windowText.split(/\s+/).filter(Boolean);
-        const skipWords = Math.round(words.length * contextRatio);
-        newText = words.slice(skipWords).join(" ");
-        console.log(`[periodic-stt] context ratio ${(contextRatio * 100).toFixed(0)}%, skip ${skipWords}/${words.length} words, new: "${newText.slice(0, 60)}"`);
+      if (hasOverlap && this.committedText) {
+        newText = deduplicateText(this.committedText, windowText);
+        console.log(`[periodic-stt] dedup: "${newText.slice(0, 60)}" (from ${windowText.split(/\s+/).length} words)`);
       } else {
         newText = windowText;
       }
@@ -200,7 +226,6 @@ export class TranscriptionSession extends DurableObject<Env> {
         this.committedText = newText;
       }
 
-      this.prevSegmentStart = this.lastProcessedChunk;
       this.lastProcessedChunk = currentChunkCount;
       this.lastPartialText = this.committedText;
       this.lastPartialBytes = this.totalBytes;
@@ -214,19 +239,17 @@ export class TranscriptionSession extends DurableObject<Env> {
             { role: "system", content: buildSystemPrompt(this.focusContext) },
             { role: "user", content: buildUserMessage(this.committedText, this.focusContext) },
           ],
-          temperature: 0,
+          temperature: 0.3,
         },
       );
       const formatted = extractText(formatResult) ?? this.committedText;
       this.lastPartialFormatted = formatted;
       console.log(`[periodic-stt] format done in ${Date.now() - fmtStart}ms, total cycle ${Date.now() - t0}ms`);
 
-      const boundaryMatch = formatted.match(/.*[.!?]/s);
-      if (boundaryMatch) {
-        this.checkpointRaw = this.committedText;
-        this.checkpointFormatted = boundaryMatch[0];
-        console.log(`[periodic-stt] checkpoint at ${this.checkpointFormatted.length}/${formatted.length} chars`);
-      }
+      // Checkpoint: store full formatted + raw, and track where the last sentence boundary is
+      this.checkpointRaw = this.committedText;
+      this.checkpointFormatted = formatted;
+      console.log(`[periodic-stt] checkpoint at ${formatted.length} chars`);
     } catch (e) {
       console.log(`[periodic-stt] failed in ${Date.now() - t0}ms: ${e}`);
       this.lastProcessedChunk = currentChunkCount;
@@ -262,11 +285,13 @@ export class TranscriptionSession extends DurableObject<Env> {
       }
 
       if (hasTail) {
-        const tailSecs = (tailAudio.byteLength / (this.audioConfig.sampleRate * 2)).toFixed(1);
-        console.log(`[processAudio] tail STT on ${tailAudio.byteLength} bytes (~${tailSecs}s)`);
+        const overlapStart = Math.max(0, this.lastProcessedChunk - OVERLAP_CHUNKS);
+        const tailWithOverlap = this.combineChunkRange(overlapStart, this.audioChunks.length);
+        const tailSecs = (tailWithOverlap.byteLength / (this.audioConfig.sampleRate * 2)).toFixed(1);
+        console.log(`[processAudio] tail STT on ${tailWithOverlap.byteLength} bytes (~${tailSecs}s) with ${this.lastProcessedChunk - overlapStart} overlap chunks`);
         sendMessage(ws, { type: "processing", stage: "stt" });
 
-        const wavData = wrapPcmAsWav(tailAudio, this.audioConfig.sampleRate, this.audioConfig.channels, 16);
+        const wavData = wrapPcmAsWav(tailWithOverlap, this.audioConfig.sampleRate, this.audioConfig.channels, 16);
         const binaryStr = Array.from(wavData, (byte) => String.fromCharCode(byte)).join("");
         const audioBase64 = btoa(binaryStr);
 
@@ -279,9 +304,12 @@ export class TranscriptionSession extends DurableObject<Env> {
           const tailText = sttResult.text.trim();
           console.log(`[processAudio] tail STT done in ${Date.now() - sttStart}ms: "${tailText.slice(0, 60)}"`);
           if (tailText) {
-            this.committedText = this.committedText
-              ? this.committedText + " " + tailText
-              : tailText;
+            const newText = deduplicateText(this.committedText, tailText);
+            if (newText) {
+              this.committedText = this.committedText
+                ? this.committedText + " " + newText
+                : newText;
+            }
           }
         } catch (e) {
           console.log(`[processAudio] tail STT failed in ${Date.now() - sttStart}ms: ${e}`);
@@ -320,37 +348,10 @@ export class TranscriptionSession extends DurableObject<Env> {
     let formatted: string;
     sendMessage(ws, { type: "processing", stage: "format" });
 
-    if (this.checkpointFormatted && this.checkpointRaw && sttText.startsWith(this.checkpointRaw)) {
-      const tailRaw = sttText.slice(this.checkpointRaw.length).trim();
-      if (!tailRaw) {
-        console.log(`[processAudio] checkpoint covers everything, no tail to format`);
-        formatted = this.checkpointFormatted;
-      } else {
-        console.log(`[processAudio] checkpoint hit, formatting tail only: "${tailRaw.slice(0, 60)}"`);
-        const fmtStart = Date.now();
-        try {
-          const tailResult = await this.env.AI.run(
-            this.env.FORMAT_MODEL ?? "@cf/meta/llama-3.2-3b-instruct",
-            {
-              messages: [
-                { role: "system", content: buildSystemPrompt(this.focusContext) },
-                { role: "user", content: buildUserMessage(tailRaw, this.focusContext) },
-              ],
-              temperature: 0,
-            },
-          );
-          const tailFormatted = extractText(tailResult) ?? tailRaw;
-          formatted = `${this.checkpointFormatted} ${tailFormatted}`;
-          console.log(`[processAudio] tail format done in ${Date.now() - fmtStart}ms`);
-        } catch {
-          formatted = `${this.checkpointFormatted} ${tailRaw}`;
-          console.log(`[processAudio] tail format failed, using raw tail`);
-        }
-      }
+    if (this.checkpointFormatted && this.checkpointRaw && sttText === this.checkpointRaw) {
+      console.log(`[processAudio] checkpoint covers everything, reusing formatted`);
+      formatted = this.checkpointFormatted;
     } else {
-      if (this.checkpointRaw) {
-        console.log(`[processAudio] checkpoint miss (raw text diverged), full format`);
-      }
       const fmtStart = Date.now();
       try {
         const formatResult = await this.env.AI.run(
@@ -360,7 +361,7 @@ export class TranscriptionSession extends DurableObject<Env> {
               { role: "system", content: buildSystemPrompt(this.focusContext) },
               { role: "user", content: buildUserMessage(sttText, this.focusContext) },
             ],
-            temperature: 0,
+            temperature: 0.3,
           },
         );
         formatted = extractText(formatResult) ?? sttText;
