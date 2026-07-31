@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub struct Config {
     pub provider: ProviderConfig,
     pub cloud: CloudConfig,
+    #[serde(default)]
     pub local: LocalConfig,
     pub audio: AudioConfig,
     pub hotkey: HotkeyConfig,
@@ -36,8 +37,48 @@ pub struct CloudConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalConfig {
-    pub server_url: String,
-    pub token: String,
+    #[serde(default = "default_model")]
+    pub model: String,
+    #[serde(default = "default_language")]
+    pub language: String,
+    #[serde(default = "default_formatter")]
+    pub formatter: String,
+    #[serde(default = "default_ollama_url")]
+    pub ollama_url: String,
+    #[serde(default = "default_ollama_model")]
+    pub ollama_model: String,
+}
+
+fn default_model() -> String {
+    "small.en".into()
+}
+
+fn default_language() -> String {
+    "en".into()
+}
+
+fn default_formatter() -> String {
+    "none".into()
+}
+
+fn default_ollama_url() -> String {
+    "http://localhost:11434".into()
+}
+
+fn default_ollama_model() -> String {
+    "qwen3:4b".into()
+}
+
+impl Default for LocalConfig {
+    fn default() -> Self {
+        Self {
+            model: default_model(),
+            language: default_language(),
+            formatter: default_formatter(),
+            ollama_url: default_ollama_url(),
+            ollama_model: default_ollama_model(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,10 +111,7 @@ pub fn default_config() -> Config {
             worker_url: String::new(),
             token: String::new(),
         },
-        local: LocalConfig {
-            server_url: "http://192.168.1.183:9090".into(),
-            token: String::new(),
-        },
+        local: LocalConfig::default(),
         audio: AudioConfig {
             sample_rate: 16000,
             channels: 1,
@@ -158,4 +196,103 @@ pub fn load() -> (Config, PathBuf) {
 pub fn save(path: &Path, cfg: &Config) -> Result<(), String> {
     let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(path, json).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PRE_ONDEVICE_CONFIG: &str = r#"{
+      "provider": { "mode": "local" },
+      "cloud": {
+        "account_id": "acct-123",
+        "api_token": "secret-api-token",
+        "stt_model": "@cf/openai/whisper-large-v3-turbo",
+        "formatter_model": "@cf/ibm-granite/granite-4.0-h-micro",
+        "worker_url": "https://voicebox.example.workers.dev",
+        "token": "secret-worker-token"
+      },
+      "local": { "server_url": "http://10.0.0.5:9090", "token": "lan-token" },
+      "audio": { "sample_rate": 16000, "channels": 1, "chunk_size": 4096 },
+      "hotkey": { "record": "ctrl+cmd" },
+      "overlay_position": "bottom_right"
+    }"#;
+
+    #[test]
+    fn old_config_parses_and_preserves_cloud_credentials() {
+        let cfg: Config = serde_json::from_str(PRE_ONDEVICE_CONFIG)
+            .expect("pre-on-device config must still deserialize; failing here wipes user settings");
+
+        assert_eq!(cfg.cloud.api_token, "secret-api-token");
+        assert_eq!(cfg.cloud.token, "secret-worker-token");
+        assert_eq!(cfg.hotkey.record, "ctrl+cmd");
+        assert_eq!(cfg.overlay_position, "bottom_right");
+    }
+
+    #[test]
+    fn old_local_block_falls_back_to_ondevice_defaults() {
+        let cfg: Config = serde_json::from_str(PRE_ONDEVICE_CONFIG).unwrap();
+
+        assert_eq!(cfg.provider.mode, "local");
+        assert_eq!(cfg.local.model, "small.en");
+        assert_eq!(cfg.local.formatter, "none");
+        assert_eq!(cfg.local.language, "en");
+    }
+
+    #[test]
+    fn missing_local_block_uses_defaults() {
+        let json = r#"{
+          "provider": { "mode": "cloud" },
+          "cloud": {
+            "account_id": "", "api_token": "", "stt_model": "m",
+            "formatter_model": "f", "worker_url": "", "token": ""
+          },
+          "audio": { "sample_rate": 16000, "channels": 1, "chunk_size": 4096 },
+          "hotkey": { "record": "ctrl+cmd" }
+        }"#;
+
+        let cfg: Config = serde_json::from_str(json).expect("absent local block must default");
+        assert_eq!(cfg.local.model, "small.en");
+        assert_eq!(cfg.local.ollama_url, "http://localhost:11434");
+    }
+
+    /// Parses a real config file when `VOICEBOX_TEST_CONFIG` points at one.
+    /// The synthetic fixtures above cover the shape; this covers an actual
+    /// on-disk file, which is what a failed migration would destroy.
+    #[test]
+    fn real_config_file_still_parses() {
+        let Ok(path) = std::env::var("VOICEBOX_TEST_CONFIG") else {
+            eprintln!("skipping: set VOICEBOX_TEST_CONFIG to a config path to run");
+            return;
+        };
+        let data = fs::read_to_string(&path).expect("read config");
+        let cfg: Config = serde_json::from_str(&data)
+            .unwrap_or_else(|e| panic!("real config at {} failed to parse: {}", path, e));
+
+        let original: serde_json::Value = serde_json::from_str(&data).unwrap();
+        let cloud = &original["cloud"];
+        assert_eq!(cfg.cloud.token, cloud["token"].as_str().unwrap_or_default());
+        assert_eq!(
+            cfg.cloud.worker_url,
+            cloud["worker_url"].as_str().unwrap_or_default()
+        );
+        assert_eq!(
+            cfg.hotkey.record,
+            original["hotkey"]["record"].as_str().unwrap_or_default()
+        );
+        assert!(!cfg.local.model.is_empty(), "local model must default");
+    }
+
+    #[test]
+    fn roundtrip_preserves_local_settings() {
+        let mut cfg = default_config();
+        cfg.local.model = "large-v3-turbo".into();
+        cfg.local.formatter = "ollama".into();
+
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.local.model, "large-v3-turbo");
+        assert_eq!(back.local.formatter, "ollama");
+    }
 }

@@ -29,7 +29,9 @@ pub fn start_capture(
     target_sample_rate: u32,
     _channels: u16,
     chunk_size: usize,
-    app_handle: AppHandle,
+    // `None` runs capture without a UI to emit level events to, which is how
+    // the headless `--record-test` path exercises this code.
+    app_handle: Option<AppHandle>,
 ) -> Result<(AudioCaptureHandle, mpsc::Receiver<Vec<u8>>), String> {
     let (chunk_tx, chunk_rx) = mpsc::channel::<Vec<u8>>(64);
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -124,7 +126,9 @@ pub fn start_capture(
                     if last.elapsed().as_millis() >= 33 {
                         *last = std::time::Instant::now();
                         let rms = rms_level(&mono_samples);
-                        let _ = app_handle.emit("voicebox:level", rms);
+                        if let Some(ref app) = app_handle {
+                            let _ = app.emit("voicebox:level", rms);
+                        }
                     }
                 }
 

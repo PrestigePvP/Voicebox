@@ -138,11 +138,18 @@ The `configure` message carries audio params and focused element context (app na
 - **STT**: `@cf/openai/whisper-large-v3-turbo`
 - **Formatter**: `@cf/qwen/qwen3-30b-a3b-fp8`
 
-## Local Backend (Phase 2)
+## Local Backend (on-device)
 
-- **STT**: faster-whisper
-- **Formatter**: Ollama
-- Provider interfaces exist at `internal/stt/` and `internal/formatter/`
+Runs entirely on your Mac — no network, no API keys.
+
+- **STT**: whisper.cpp via `whisper-rs`, Metal-accelerated
+- **Models**: GGML `.bin`, downloaded in-app to `~/.config/voicebox/models/`
+  - `small.en` (466 MB) is the default — ~24x realtime on an M1 Pro and punctuates correctly
+  - `tiny.en` / `base.en` are faster but return little or no punctuation
+  - `large-v3-turbo` (1.6 GB) is the most accurate and the only multilingual option
+- **Formatter**: none by default (Whisper's own punctuation is used as-is), or optionally a local Ollama instance for app-aware formatting
+
+Implemented in `src-tauri/src/local_engine.rs` and `src-tauri/src/models.rs`.
 
 ## Audio Specs
 
