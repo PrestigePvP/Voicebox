@@ -1,0 +1,13 @@
+[env]
+# whisper.cpp's ggml uses std::filesystem::path, which requires macOS 10.15+.
+# Tauri's bundle build otherwise exports its own default (10.13) and cmake bakes
+# it into CMAKE_OSX_DEPLOYMENT_TARGET, so the C++ compile fails only under
+# `cargo tauri build` while `cargo build` succeeds. Setting it here applies to
+# every cargo-invoked build script, dev and bundle alike.
+#
+# Keep in sync with bundle.macOS.minimumSystemVersion in tauri.conf.json.
+#
+# `force = true` is required: Tauri exports MACOSX_DEPLOYMENT_TARGET itself
+# before invoking cargo, and a plain `[env]` value never overrides a variable
+# that is already set in the environment.
+MACOSX_DEPLOYMENT_TARGET = { value = "10.15", force = true }

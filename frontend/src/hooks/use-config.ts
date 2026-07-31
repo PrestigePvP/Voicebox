@@ -14,8 +14,11 @@ interface Config {
     token: string;
   };
   local: {
-    server_url: string;
-    token: string;
+    model: string;
+    language: string;
+    formatter: string;
+    ollama_url: string;
+    ollama_model: string;
   };
   audio: {
     sample_rate: number;

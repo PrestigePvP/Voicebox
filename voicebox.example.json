@@ -11,8 +11,11 @@
     "token": ""
   },
   "local": {
-    "server_url": "http://192.168.1.183:9090",
-    "token": ""
+    "model": "small.en",
+    "language": "en",
+    "formatter": "none",
+    "ollama_url": "http://localhost:11434",
+    "ollama_model": "qwen3:4b"
   },
   "audio": {
     "sample_rate": 16000,
