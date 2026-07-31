@@ -1,4 +1,12 @@
+import { handleMeetings } from "./meetings";
+
 export { TranscriptionSession } from "./session";
+
+const checkAuth = (request: Request, env: Env): boolean => {
+  const auth = request.headers.get("Authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
+  return token !== null && token === env.VOICEBOX_TOKEN;
+};
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -9,9 +17,7 @@ export default {
     }
 
     if (url.pathname === "/ws" && request.method === "GET") {
-      const auth = request.headers.get("Authorization");
-      const token = auth?.startsWith("Bearer ") ? auth.slice(7) : null;
-      if (token !== env.VOICEBOX_TOKEN) {
+      if (!checkAuth(request, env)) {
         return Response.json({ error: "auth_failed" }, { status: 401 });
       }
 
@@ -22,6 +28,13 @@ export default {
       const id = env.TRANSCRIPTION_SESSION.newUniqueId();
       const stub = env.TRANSCRIPTION_SESSION.get(id);
       return stub.fetch(request);
+    }
+
+    if (url.pathname.startsWith("/meetings/")) {
+      if (!checkAuth(request, env)) {
+        return Response.json({ error: "auth_failed" }, { status: 401 });
+      }
+      return handleMeetings(request, env, url);
     }
 
     return new Response("Not found", { status: 404 });

@@ -2,14 +2,24 @@
   "name": "voicebox",
   "main": "src/index.ts",
   "compatibility_date": "2025-03-01",
+  "account_id": "20eb8dcbe341076f88dc184eff6eff50",
 
   "ai": {
     "binding": "AI"
   },
 
+  "r2_buckets": [
+    {
+      "binding": "MEETINGS",
+      "bucket_name": "voicebox-meetings"
+    }
+  ],
+
   "vars": {
     "STT_MODEL": "@cf/openai/whisper-large-v3-turbo",
-    "FORMAT_MODEL": "@cf/google/gemma-3-12b-it"
+    "FORMAT_MODEL": "@cf/google/gemma-3-12b-it",
+    "MEETING_STT_MODEL": "@cf/deepgram/nova-3",
+    "MEETING_ENRICH_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
   },
 
   "durable_objects": {

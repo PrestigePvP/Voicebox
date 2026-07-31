@@ -2,7 +2,11 @@ mod accessibility;
 mod audio;
 mod config;
 mod hotkey;
+mod meeting;
+mod meeting_api;
+mod meeting_store;
 mod pipeline;
+mod wav_writer;
 
 use config::Config;
 use std::io::Write;
@@ -16,11 +20,11 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewUrl,
 };
 
-struct AppState {
-    config: Config,
+pub(crate) struct AppState {
+    pub(crate) config: Config,
     config_path: PathBuf,
     hotkey_handle: Option<hotkey::HotkeyHandle>,
-    recording: bool,
+    pub(crate) recording: bool,
     capture_handle: Option<audio::AudioCaptureHandle>,
 }
 
@@ -86,6 +90,12 @@ fn register_hotkey(combo: &str, app_handle: AppHandle) -> Option<hotkey::HotkeyH
 }
 
 fn on_hotkey_down(app_handle: AppHandle) {
+    // The meeting recorder owns the microphone while it runs.
+    if meeting::is_recording(&app_handle) {
+        log::info!("Ignoring dictation hotkey during meeting recording");
+        return;
+    }
+
     let state = app_handle.state::<Arc<Mutex<AppState>>>();
     let mut s = state.lock().unwrap();
 
@@ -218,7 +228,7 @@ async fn run_pipeline(
 
             let _ = app.emit("voicebox:state", serde_json::json!({"state": "copied"}));
             tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
-            hide_overlay(&app);
+            hide_overlay_unless_meeting(&app);
             let _ = app.emit("voicebox:state", serde_json::json!({"state": "idle"}));
         }
         Err(e) => {
@@ -231,9 +241,17 @@ async fn run_pipeline(
                 }),
             );
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            hide_overlay(&app);
+            hide_overlay_unless_meeting(&app);
             let _ = app.emit("voicebox:state", serde_json::json!({"state": "idle"}));
         }
+    }
+}
+
+/// A dictation that was already in flight when a meeting recording started
+/// must not hide the overlay out from under the meeting's recording pill.
+fn hide_overlay_unless_meeting(app: &AppHandle) {
+    if !meeting::is_recording(app) {
+        hide_overlay(app);
     }
 }
 
@@ -259,7 +277,7 @@ fn write_clipboard(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn show_overlay(app: &AppHandle) {
+pub(crate) fn show_overlay(app: &AppHandle) {
     if let Some(overlay) = app.get_webview_window("overlay") {
         let state = app.state::<Arc<Mutex<AppState>>>();
         let position = state.lock().unwrap().config.overlay_position.clone();
@@ -324,7 +342,7 @@ fn cursor_monitor(_window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
     None
 }
 
-fn hide_overlay(app: &AppHandle) {
+pub(crate) fn hide_overlay(app: &AppHandle) {
     if let Some(overlay) = app.get_webview_window("overlay") {
         let _ = overlay.hide();
     }
@@ -335,6 +353,13 @@ fn show_settings(app: &AppHandle) {
         let _ = main.center();
         let _ = main.show();
         let _ = main.set_focus();
+    }
+}
+
+fn show_meetings(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("meetings") {
+        let _ = win.show();
+        let _ = win.set_focus();
     }
 }
 
@@ -387,11 +412,88 @@ fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
+/// Headless Meeting Mode processing of an existing WAV file:
+///
+/// ```text
+/// voicebox --meeting-file path/to/recording.wav
+/// ```
+///
+/// Copies the WAV into a new meeting folder and runs the same
+/// upload → diarize → enrich pipeline the in-app Stop button runs.
+fn run_headless_meeting(cfg: &Config, wav_path: &str) {
+    let source = PathBuf::from(wav_path);
+    if !source.is_file() {
+        eprintln!("No such file: {}", wav_path);
+        std::process::exit(2);
+    }
+
+    let (meeting_id, dir) = match meeting_store::create_meeting_dir(cfg) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let mut doc = meeting_store::new_doc(&meeting_id, now_millis());
+    if let Err(e) = std::fs::copy(&source, dir.join(&doc.audio_file)) {
+        eprintln!("Copying audio failed: {}", e);
+        std::process::exit(1);
+    }
+    let data_bytes = std::fs::metadata(dir.join(&doc.audio_file)).map(|m| m.len()).unwrap_or(0);
+    doc.duration_sec = data_bytes.saturating_sub(44) as f64 / (cfg.audio.sample_rate as f64 * 2.0);
+    if let Err(e) = meeting_store::save_doc(&dir, &doc) {
+        eprintln!("{}", e);
+        std::process::exit(1);
+    }
+
+    eprintln!("meeting:  {} ({})", meeting_id, dir.display());
+    eprintln!("input:    {} ({} bytes, ~{:.1} min)", wav_path, data_bytes, doc.duration_sec / 60.0);
+
+    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let total = std::time::Instant::now();
+    let result = runtime.block_on(meeting::run_processing(cfg, &meeting_id, |event| match event {
+        meeting::ProcessEvent::Uploading(p) => eprintln!("stage:    uploading {:.0}%", p * 100.0),
+        meeting::ProcessEvent::Transcribing => eprintln!("stage:    transcribing"),
+        meeting::ProcessEvent::Formatting => eprintln!("stage:    formatting"),
+    }));
+
+    match result {
+        Ok(doc) => {
+            eprintln!("total:    {}ms", total.elapsed().as_millis());
+            eprintln!(
+                "result:   {} turns, {} speakers, title: {}",
+                doc.turns.len(),
+                doc.speakers.len(),
+                doc.title.as_deref().unwrap_or("(none)")
+            );
+            eprintln!("---");
+            println!("{}", dir.join("meeting.md").display());
+        }
+        Err(e) => {
+            eprintln!("Meeting processing failed: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_log();
 
     let (cfg, cfg_path) = config::load();
+
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--meeting-file") {
+        match args.get(i + 1) {
+            Some(path) => return run_headless_meeting(&cfg, path),
+            None => {
+                eprintln!("--meeting-file requires a path");
+                std::process::exit(2);
+            }
+        }
+    }
+
     log::info!("VoiceBox ready (hotkey: {})", cfg.hotkey.record);
 
     let state = Arc::new(Mutex::new(AppState {
@@ -409,6 +511,14 @@ pub fn run() {
             get_config,
             save_config,
             get_config_path,
+            meeting::start_meeting,
+            meeting::stop_meeting,
+            meeting::get_meeting_state,
+            meeting::retry_meeting,
+            meeting::list_meetings,
+            meeting::load_meeting,
+            meeting::rename_speaker,
+            meeting::open_meetings_folder,
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -434,12 +544,22 @@ pub fn run() {
             // Create tray icon
             let show_settings_item =
                 MenuItemBuilder::with_id("show_settings", "Show Settings").build(app)?;
+            let toggle_meeting_item =
+                MenuItemBuilder::with_id("toggle_meeting", "Start Meeting Recording").build(app)?;
+            let open_meetings_item =
+                MenuItemBuilder::with_id("open_meetings", "Meetings…").build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
             let tray_menu = MenuBuilder::new(app)
                 .item(&show_settings_item)
+                .item(&toggle_meeting_item)
+                .item(&open_meetings_item)
                 .separator()
                 .item(&quit_item)
                 .build()?;
+
+            // The meeting module keeps the toggle item's handle so it can flip
+            // the label between Start/Stop at runtime.
+            meeting::init(&app_handle, toggle_meeting_item);
 
             let _tray = TrayIconBuilder::new()
                 .icon(
@@ -453,6 +573,24 @@ pub fn run() {
                 .menu(&tray_menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "show_settings" => show_settings(app),
+                    "toggle_meeting" => {
+                        let result = if meeting::is_recording(app) {
+                            meeting::stop(app)
+                        } else {
+                            meeting::start(app).inspect(|_| show_meetings(app))
+                        };
+                        if let Err(e) = result {
+                            log::error!("[meeting] tray toggle failed: {}", e);
+                            let _ = app.emit(
+                                "voicebox:meeting-state",
+                                serde_json::json!({
+                                    "state": "error", "meetingId": "", "message": e,
+                                }),
+                            );
+                            show_meetings(app);
+                        }
+                    }
+                    "open_meetings" => show_meetings(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -463,15 +601,17 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Hide main window on close (keep app running)
-            if let Some(main) = app.get_webview_window("main") {
-                let main_clone = main.clone();
-                main.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        api.prevent_close();
-                        let _ = main_clone.hide();
-                    }
-                });
+            // Hide windows on close (keep app running)
+            for label in ["main", "meetings"] {
+                if let Some(win) = app.get_webview_window(label) {
+                    let win_clone = win.clone();
+                    win.on_window_event(move |event| {
+                        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                            api.prevent_close();
+                            let _ = win_clone.hide();
+                        }
+                    });
+                }
             }
 
             // Register hotkey

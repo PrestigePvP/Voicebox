@@ -1,23 +1,13 @@
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useVoiceBox } from "./hooks/use-voicebox";
+import { useMeeting } from "./hooks/use-meeting";
 import { useConfig } from "./hooks/use-config";
 import { cn } from "./lib/utils";
+import { formatClock } from "./lib/meeting-types";
 import TitleBar from "./components/title-bar";
 import SettingsForm from "./components/settings-form";
-
-const BAR_WEIGHTS = [0.3, 0.5, 0.7, 1.0, 0.7, 0.5, 0.3];
-
-const VoiceMeter = ({ level }: { level: number }) => (
-  <div className="flex items-center gap-[3px] h-8">
-    {BAR_WEIGHTS.map((w, i) => (
-      <div
-        key={i}
-        className="w-1 rounded-full bg-red-400 transition-[height] duration-75"
-        style={{ height: `${Math.max(4, level * w * 32)}px` }}
-      />
-    ))}
-  </div>
-);
+import VoiceMeter from "./components/voice-meter";
+import MeetingsApp from "./components/meetings/meetings-app";
 
 const isBottom = (pos: string) => pos.startsWith("bottom");
 
@@ -31,6 +21,25 @@ const AppIcon = ({ src }: { src: string }) => (
   <img src={src} alt="" className="h-5 w-5 rounded" />
 );
 
+const MeetingPill = ({ elapsedSec, level, anchor }: {
+  elapsedSec: number;
+  level: number;
+  anchor: string;
+}) => (
+  <div className={cn("flex h-screen w-screen flex-col items-center", anchor)}>
+    <Pill>
+      <span className="relative flex h-2 w-2 mr-2.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
+        <span className="relative inline-flex h-2 w-2 rounded-full bg-red-500" />
+      </span>
+      <span className="mr-2.5 font-mono text-xs text-zinc-300 tabular-nums">
+        {formatClock(elapsedSec)}
+      </span>
+      <VoiceMeter level={level} />
+    </Pill>
+  </div>
+);
+
 const Overlay = ({ uiState, level, partialText, position, appIcon }: {
   uiState: ReturnType<typeof useVoiceBox>["uiState"];
   level: number;
@@ -38,8 +47,13 @@ const Overlay = ({ uiState, level, partialText, position, appIcon }: {
   position: string;
   appIcon: string | null;
 }) => {
+  const { meetingState, elapsedSec } = useMeeting();
   const bottom = isBottom(position);
   const anchor = bottom ? "justify-end" : "justify-start";
+
+  if (uiState.state === "idle" && meetingState.state === "recording") {
+    return <MeetingPill elapsedSec={elapsedSec} level={level} anchor={anchor} />;
+  }
 
   if (uiState.state === "copied") {
     return (
@@ -124,6 +138,10 @@ const App = () => {
         </div>
       </div>
     );
+  }
+
+  if (windowLabel === "meetings") {
+    return <MeetingsApp />;
   }
 
   return <Overlay uiState={uiState} level={level} partialText={partialText} position={config?.overlay_position ?? "top_center"} appIcon={appIcon} />;

@@ -2,8 +2,17 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useConfig, type Mode } from "../hooks/use-config";
 import { cn } from "../lib/utils";
+
+const openMeetingsWindow = async () => {
+  const win = await WebviewWindow.getByLabel("meetings");
+  if (win) {
+    await win.show();
+    await win.setFocus();
+  }
+};
 
 const overlayPositions = [
   { value: "top_center", label: "Top Center" },
@@ -99,6 +108,7 @@ const SettingsForm = () => {
         token: values.localToken,
       },
       beta: {
+        ...config.beta,
         streaming_stt: values.streamingStt,
       },
     };
@@ -221,6 +231,13 @@ const SettingsForm = () => {
           className="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           Save
+        </button>
+        <button
+          type="button"
+          onClick={openMeetingsWindow}
+          className="px-4 py-2 text-sm font-medium rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-colors"
+        >
+          Meetings
         </button>
         {saveStatus === "saved" && (
           <span className="text-sm text-green-400">Settings saved</span>

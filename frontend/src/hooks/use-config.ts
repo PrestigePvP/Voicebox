@@ -24,6 +24,7 @@ interface Config {
   };
   hotkey: { record: string };
   beta: { streaming_stt: boolean };
+  meeting?: { save_dir: string };
   overlay_position: string;
 }
 

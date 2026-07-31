@@ -11,6 +11,8 @@ pub struct Config {
     pub hotkey: HotkeyConfig,
     #[serde(default)]
     pub beta: BetaConfig,
+    #[serde(default)]
+    pub meeting: MeetingConfig,
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
 }
@@ -34,10 +36,20 @@ pub struct CloudConfig {
     pub token: String,
 }
 
+// Per-field defaults: a config written by a build with a different local
+// block (e.g. the on-device whisper branch) must still parse — a parse
+// failure here falls through to load()'s create-default path, which
+// overwrites the user's config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalConfig {
+    #[serde(default = "default_server_url")]
     pub server_url: String,
+    #[serde(default)]
     pub token: String,
+}
+
+fn default_server_url() -> String {
+    "http://192.168.1.183:9090".into()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +69,13 @@ pub struct BetaConfig {
     pub streaming_stt: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MeetingConfig {
+    /// Empty means `~/Documents/VoiceBox Meetings`.
+    #[serde(default)]
+    pub save_dir: String,
+}
+
 pub fn default_config() -> Config {
     Config {
         provider: ProviderConfig {
@@ -71,7 +90,7 @@ pub fn default_config() -> Config {
             token: String::new(),
         },
         local: LocalConfig {
-            server_url: "http://192.168.1.183:9090".into(),
+            server_url: default_server_url(),
             token: String::new(),
         },
         audio: AudioConfig {
@@ -83,12 +102,16 @@ pub fn default_config() -> Config {
             record: "ctrl+cmd".into(),
         },
         beta: BetaConfig::default(),
+        meeting: MeetingConfig::default(),
         overlay_position: default_overlay_position(),
     }
 }
 
 fn config_search_paths() -> Vec<PathBuf> {
     let mut paths = Vec::new();
+    if let Ok(path) = std::env::var("VOICEBOX_CONFIG") {
+        paths.push(PathBuf::from(path));
+    }
     if let Some(home) = dirs::home_dir() {
         paths.push(home.join(".config").join("voicebox").join("voicebox.json"));
     }
@@ -158,4 +181,49 @@ pub fn load() -> (Config, PathBuf) {
 pub fn save(path: &Path, cfg: &Config) -> Result<(), String> {
     let json = serde_json::to_string_pretty(cfg).map_err(|e| e.to_string())?;
     fs::write(path, json).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config written by the on-device whisper branch has a different
+    /// `local` block. It must still parse — failing here means load() wipes
+    /// the user's config with defaults.
+    #[test]
+    fn foreign_local_block_parses_and_preserves_cloud_credentials() {
+        let json = r#"{
+          "provider": { "mode": "local" },
+          "cloud": {
+            "account_id": "", "api_token": "",
+            "stt_model": "@cf/openai/whisper-large-v3-turbo",
+            "formatter_model": "@cf/ibm-granite/granite-4.0-h-micro",
+            "worker_url": "wss://voicebox.example.workers.dev",
+            "token": "secret-worker-token"
+          },
+          "local": {
+            "model": "small.en", "language": "en", "formatter": "none",
+            "ollama_url": "http://localhost:11434", "ollama_model": "qwen3:4b"
+          },
+          "audio": { "sample_rate": 16000, "channels": 1, "chunk_size": 4096 },
+          "hotkey": { "record": "ctrl+cmd" },
+          "beta": { "streaming_stt": true },
+          "overlay_position": "bottom_center"
+        }"#;
+
+        let cfg: Config = serde_json::from_str(json)
+            .expect("foreign local block must not fail the whole config");
+        assert_eq!(cfg.cloud.token, "secret-worker-token");
+        assert_eq!(cfg.local.server_url, default_server_url());
+        assert_eq!(cfg.meeting.save_dir, "");
+    }
+
+    #[test]
+    fn meeting_section_roundtrips() {
+        let mut cfg = default_config();
+        cfg.meeting.save_dir = "/tmp/meetings".into();
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.meeting.save_dir, "/tmp/meetings");
+    }
 }

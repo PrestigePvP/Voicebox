@@ -4,6 +4,8 @@ VoiceBox is a voice-to-text pipeline with a Tauri v2 desktop app (Rust + React f
 
 Local backend support (faster-whisper + Ollama) is available via the `server/` directory (separate Go binary).
 
+**Meeting Mode** records in-person meetings (30–120 min) from the mic to a crash-safe local WAV, then batch-processes through the Worker: R2 multipart upload → `@cf/deepgram/nova-3` with diarization (single-request full-file — consistent speaker labels) → LLM name-inference/title/summary. Results land in `~/Documents/VoiceBox Meetings/<id>/` as `audio.wav` + `meeting.json` + `meeting.md`, viewable/renamable in the dedicated `meetings` window. Started from the tray or meetings window (no hotkey). Cloud-only: always uses `config.cloud` regardless of `provider.mode`.
+
 ## Commands
 
 ### Tauri (root directory)
@@ -11,6 +13,7 @@ Local backend support (faster-whisper + Ollama) is available via the `server/` d
 - `cargo tauri build` - build standalone `.app` bundle
 - `cargo clippy` - lint Rust code (run from `src-tauri/`)
 - `cargo test` - run Rust tests (run from `src-tauri/`)
+- `voicebox --meeting-file recording.wav` - headless: run an existing WAV through the full Meeting Mode pipeline (upload/diarize/enrich). `VOICEBOX_CONFIG=/path/to/config.json` overrides the config search path, useful for pointing at a `wrangler dev` worker.
 
 ### Frontend (`frontend/` directory)
 - `pnpm install` - install dependencies
@@ -34,6 +37,10 @@ Local backend support (faster-whisper + Ollama) is available via the `server/` d
 - **`config.rs`** - JSON config load/save/defaults. Searches `~/.config/voicebox/voicebox.json`, then next to executable, then `./voicebox.json`. Auto-migrates existing TOML configs to JSON.
 - **`audio.rs`** - Audio capture using `cpal`. Records PCM s16le at configured sample rate. Runs on dedicated thread (cpal::Stream is !Send). Emits fixed-size chunks via tokio mpsc channel. Emits RMS level via Tauri events (~30fps).
 - **`pipeline.rs`** - Async WebSocket client via `tokio-tungstenite`. Connects to Worker/server, sends `configure` (audio params + focus context), streams PCM chunks, sends `audio_end`, receives transcription result. Spawns sender/receiver tasks.
+- **`meeting.rs`** - Meeting Mode lifecycle: `Phase` state machine (Idle/Recording/Processing) in its own managed `MeetingState`, start/stop (tray + IPC), `run_processing` pipeline, `voicebox:meeting-state` events, and all meeting IPC commands. Blocks the dictation hotkey while recording (and vice versa).
+- **`meeting_api.rs`** - reqwest client for the Worker's `/meetings/*` HTTP API: multipart upload (uniform 10 MiB parts, 3 retries each), transcribe (15 min timeout), enrich (best-effort — never fails the meeting).
+- **`meeting_store.rs`** - Meeting folder management, `meeting.json` schema (camelCase, versioned), markdown rendering, list/load/save.
+- **`wav_writer.rs`** - Incremental WAV writer; header patched + fsynced every ~5 s so the file is playable even after a crash mid-recording.
 - **`hotkey.rs`** - Modifier-only hotkey via CGEventTap (macOS). Parses combo strings ("ctrl+cmd") to modifier bitmask. Runs CFRunLoop on dedicated thread. Press/release callbacks for hold-to-record.
 - **`accessibility.rs`** - macOS AX API via raw objc runtime: captures focused element context (app name, bundle ID, PID, role, title, placeholder, value). CGEvent Cmd+V simulation for auto-paste.
 
@@ -43,9 +50,12 @@ Local backend support (faster-whisper + Ollama) is available via the `server/` d
 - **`frontend/src/components/title-bar.tsx`** - Frameless title bar with drag region (`data-tauri-drag-region`) and close button.
 - **`frontend/src/hooks/use-voicebox.ts`** - Listens for `voicebox:state` and `voicebox:level` events from Rust via `@tauri-apps/api/event`. Provides `uiState` and `level` to the UI.
 - **`frontend/src/hooks/use-config.ts`** - Calls `get_config`/`save_config`/`get_config_path` via Tauri `invoke`.
+- **`frontend/src/hooks/use-meeting.ts`** - Listens for `voicebox:meeting-state` + `voicebox:level`; pulls initial state via `get_meeting_state`; exposes start/stop/retry.
+- **`frontend/src/components/meetings/`** - Meetings window: `meetings-app.tsx` shell, `record-panel.tsx` (start/stop, elapsed, level, progress), `meeting-list.tsx`, `meeting-detail.tsx` (transcript, speaker legend with inline rename).
 
 ### Cloud Backend
 - **`worker/`** - Cloudflare Worker with Durable Object. WebSocket endpoint at `/ws` that accumulates PCM audio, wraps as WAV, runs Whisper → LLM, returns formatted text.
+- **`worker/src/meetings.ts`** - Meeting Mode HTTP routes (see Meeting HTTP API below). `diarize.ts` merges nova-3 utterances into speaker turns (8 s gap break, per-word fallback); `meeting-prompt.ts` samples long transcripts (~12k-word budget, front-weighted) and parses the strict-JSON enrich response with a never-fail fallback.
 
 ## Data Flow
 
@@ -68,11 +78,22 @@ Client connects to `GET /ws` with `Authorization: Bearer <token>` header.
 - Client sends binary PCM chunks, then `{"type":"audio_end"}`
 - Server sends `{"type":"processing","stage":"stt"|"format"}`, then `{"type":"result","raw":"...","formatted":"..."}`
 
+## Meeting HTTP API (`/meetings/*`, same bearer token)
+
+- `POST /meetings/uploads` `{sizeBytes}` → `{key, uploadId}` (413 over 300 MB)
+- `PUT /meetings/uploads/part?key&uploadId&partNumber` (raw bytes; parts must be uniform size except the last, ≥5 MiB) → `{partNumber, etag}`
+- `POST /meetings/uploads/complete` `{key, uploadId, parts}` → `{sizeBytes}`
+- `POST /meetings/transcribe` `{key}` → `{durationSec, model, speakerCount, turns:[{start,end,speaker,text}]}` — streams the R2 object into nova-3 (`diarize/punctuate/smart_format/utterances`). Workers AI omits `metadata.duration`; duration comes from the last utterance.
+- `POST /meetings/enrich` `{turns}` → `{title, summary, speakers:{id:name|null}, model}` — uses `MEETING_ENRICH_MODEL` (llama-3.3-70b; the account cannot access gemma-3-12b-it, error 5018). Parse failures return the null-fallback shape with 200, never a 5xx.
+
+R2 bucket `voicebox-meetings` has lifecycle rules: objects deleted after 2 days, incomplete multipart uploads aborted after 1 day. Meeting audio's source of truth is the local WAV, not R2.
+
 ## Window Behavior
 
-Two separate windows managed by Tauri:
+Three windows managed by Tauri:
 - **Settings window** (`"main"`): 700×450, frameless, centered, visible on start. Close hides (app stays in tray).
-- **Overlay window** (`"overlay"`): 160×48, transparent, always-on-top, no decorations, skip taskbar. Shown during recording, hidden after result.
+- **Overlay window** (`"overlay"`): transparent, always-on-top, no decorations, skip taskbar. Shown during recording, hidden after result. Shows a red-dot + elapsed pill during meeting recording.
+- **Meetings window** (`"meetings"`): 900×650, resizable, frameless, hidden by default. Close hides. Opened via tray (`Meetings…`), the Meetings button in Settings, or automatically when a meeting starts from the tray.
 
 Settings can be opened via:
 - System tray icon click
