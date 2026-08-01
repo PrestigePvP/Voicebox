@@ -19,7 +19,7 @@
         "height": 450,
         "decorations": false,
         "center": true,
-        "visible": true,
+        "visible": false,
         "transparent": true,
         "hiddenTitle": true
       },

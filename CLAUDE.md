@@ -11,6 +11,7 @@ Local backend support (faster-whisper + Ollama) is available via the `server/` d
 ### Tauri (root directory)
 - `cargo tauri dev` - run dev server (Rust + Vite hot reload)
 - `cargo tauri build` - build standalone `.app` bundle
+- `./scripts/install.sh` - build signed + install to `/Applications` (see Install & Autostart)
 - `cargo clippy` - lint Rust code (run from `src-tauri/`)
 - `cargo test` - run Rust tests (run from `src-tauri/`)
 - `voicebox --meeting-file recording.wav` - headless: run an existing WAV through the full Meeting Mode pipeline (upload/diarize/enrich). `VOICEBOX_CONFIG=/path/to/config.json` overrides the config search path, useful for pointing at a `wrangler dev` worker.
@@ -87,6 +88,54 @@ Client connects to `GET /ws` with `Authorization: Bearer <token>` header.
 - `POST /meetings/enrich` `{turns}` → `{title, summary, speakers:{id:name|null}, model}` — uses `MEETING_ENRICH_MODEL` (llama-3.3-70b; the account cannot access gemma-3-12b-it, error 5018). Parse failures return the null-fallback shape with 200, never a 5xx.
 
 R2 bucket `voicebox-meetings` has lifecycle rules: objects deleted after 2 days, incomplete multipart uploads aborted after 1 day. Meeting audio's source of truth is the local WAV, not R2.
+
+## Install & Autostart
+
+`./scripts/install.sh` builds with a local code-signing identity and replaces
+`/Applications/VoiceBox.app`.
+
+**Signing is not optional here.** Accessibility (CGEventTap hotkey, AX focus
+context, Cmd+V paste) and Microphone TCC grants are keyed to the code
+signature. Ad-hoc signing pins the cdhash, so every rebuild revokes both grants
+and the app starts at login with a silently dead hotkey. A stable identity
+gives a stable designated requirement, so the grants persist across rebuilds.
+
+Setup (once per machine):
+1. Keychain Access > Certificate Assistant > Create a Certificate — name
+   `VoiceBox Local`, **Self Signed Root**, **Code Signing**.
+2. `cp src-tauri/tauri.local.conf.example.json src-tauri/tauri.local.conf.json`
+   and set `signingIdentity`. It is merged at build time via `--config`.
+   Gitignored because the identity name is per-machine — **not** because it
+   holds a secret; the private key lives in the keychain, never in the repo.
+
+A self-signed root imports as untrusted, so `security find-identity -v` (valid
+only) won't list it. `codesign` accepts it regardless, which is why
+`install.sh` checks without `-v`. Don't "fix" this with `add-trusted-cert`:
+trusting the root means trusting it to sign anything, for no gain here.
+
+`hardenedRuntime: false` lives in the **local** config, not the committed one.
+It is a self-signed-local concession — hardened runtime would force a mic
+entitlements file for no benefit on a build that is never notarized. Anyone
+building for distribution wants Tauri's default (`true`) plus an entitlements
+file asserting `com.apple.security.device.audio-input`, so the committed
+config must not pin it off.
+
+`src-tauri/Info.plist` supplies `NSMicrophoneUsageDescription` (Tauri
+auto-merges an `Info.plist` sitting next to `tauri.conf.json`). This is a TCC
+requirement in its own right, independent of hardened runtime.
+
+Autostart uses `tauri-plugin-autostart` with `MacosLauncher::LaunchAgent`,
+passing `--autostart` at login. The plist is
+`~/Library/LaunchAgents/VoiceBox.plist` — `auto-launch` names it from
+`package_info().name` (i.e. `productName`), **not** the bundle identifier. The `main` window is declared `"visible": false` and
+shown in `setup` only when that flag is absent — config windows are created
+before `setup` runs, so hiding it there instead would race and flash on a cold
+boot. The plugin's own state is the source of truth; nothing is mirrored into
+`voicebox.json`, which would drift when the user removes the login item in
+System Settings. Enabling requires `current_exe()` under `/Applications`
+(the plist records whatever binary enabled it, so `cargo tauri dev` would pin
+the dev binary), but an already-enabled login item stays switchable off from
+anywhere — otherwise a stale plist is unreachable from the UI that made it.
 
 ## Window Behavior
 

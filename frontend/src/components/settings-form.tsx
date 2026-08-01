@@ -3,6 +3,7 @@ import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { useAutostart } from "../hooks/use-autostart";
 import { useConfig, type Mode } from "../hooks/use-config";
 import { cn } from "../lib/utils";
 
@@ -49,6 +50,7 @@ type FormValues = z.infer<typeof schema>;
 
 const SettingsForm = () => {
   const { config, loading, configPath, save } = useConfig();
+  const autostart = useAutostart();
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
 
   const {
@@ -87,6 +89,10 @@ const SettingsForm = () => {
   }, [config, reset]);
 
   const mode = watch("mode");
+
+  // An already-registered login item must stay switchable off even from a dev
+  // build, or a stale plist becomes unreachable from the UI that created it.
+  const autostartLocked = !autostart.installed && !autostart.enabled;
 
   const onSubmit = async (values: FormValues) => {
     if (!config) return;
@@ -164,6 +170,29 @@ const SettingsForm = () => {
             </label>
           </div>
         </Field>
+
+        <div className="flex flex-col gap-1">
+          <label
+            className={cn(
+              "flex items-center gap-3",
+              autostartLocked ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+            )}
+          >
+            <input
+              type="checkbox"
+              checked={autostart.enabled}
+              disabled={autostartLocked}
+              onChange={(e) => autostart.setEnabled(e.target.checked)}
+              className="h-4 w-4 rounded border-zinc-600 bg-zinc-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-zinc-900"
+            />
+            <span className="text-sm text-zinc-400">Start at login</span>
+          </label>
+          {autostartLocked && (
+            <p className="ml-7 text-xs text-zinc-600">
+              Install VoiceBox to /Applications to enable
+            </p>
+          )}
+        </div>
       </div>
 
       {mode === "cloud" && (

@@ -9,6 +9,7 @@ mod pipeline;
 mod wav_writer;
 
 use config::Config;
+use serde::Serialize;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -19,6 +20,7 @@ use tauri::{
     webview::WebviewWindowBuilder,
     AppHandle, Emitter, Manager, WebviewUrl,
 };
+use tauri_plugin_autostart::ManagerExt;
 
 pub(crate) struct AppState {
     pub(crate) config: Config,
@@ -63,6 +65,51 @@ fn save_config(
 #[tauri::command]
 fn get_config_path(state: tauri::State<'_, Arc<Mutex<AppState>>>) -> String {
     state.lock().unwrap().config_path.display().to_string()
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AutostartStatus {
+    enabled: bool,
+    installed: bool,
+}
+
+/// The login item registers whatever `current_exe()` points at, so enabling it
+/// from a dev build or from the build directory silently pins the wrong binary.
+fn running_from_applications() -> bool {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().contains("/Applications/"))
+        .unwrap_or(false)
+}
+
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> AutostartStatus {
+    AutostartStatus {
+        enabled: app.autolaunch().is_enabled().unwrap_or(false),
+        installed: running_from_applications(),
+    }
+}
+
+#[tauri::command]
+fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    if enabled && !running_from_applications() {
+        return Err("VoiceBox must be installed to /Applications first".into());
+    }
+
+    let manager = app.autolaunch();
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
+    result.map_err(|e| e.to_string())?;
+
+    log::info!(
+        "Autostart {} for {:?}",
+        if enabled { "enabled" } else { "disabled" },
+        std::env::current_exe().unwrap_or_default()
+    );
+    Ok(())
 }
 
 fn register_hotkey(combo: &str, app_handle: AppHandle) -> Option<hotkey::HotkeyHandle> {
@@ -511,6 +558,8 @@ pub fn run() {
             get_config,
             save_config,
             get_config_path,
+            get_autostart,
+            set_autostart,
             meeting::start_meeting,
             meeting::stop_meeting,
             meeting::get_meeting_state,
@@ -522,6 +571,21 @@ pub fn run() {
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
+
+            app_handle.plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                Some(vec!["--autostart"]),
+            ))?;
+
+            // "main" is declared hidden so a login-item launch can never flash
+            // it: config windows are created before setup runs, so hiding it
+            // here instead would race — worst of all on a cold boot, which is
+            // exactly when launchd starts us.
+            if !std::env::args().any(|a| a == "--autostart") {
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.show();
+                }
+            }
 
             // Create overlay window
             let _overlay = WebviewWindowBuilder::new(
