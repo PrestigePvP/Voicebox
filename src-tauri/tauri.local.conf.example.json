@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "macOS": {
+      "signingIdentity": "VoiceBox Local",
+      "hardenedRuntime": false
+    }
+  }
+}

@@ -6,12 +6,12 @@ const startDrag = (e: React.MouseEvent) => {
   getCurrentWindow().startDragging();
 };
 
-const TitleBar = () => (
+const TitleBar = ({ title = "VoiceBox" }: { title?: string }) => (
   <div
     className="flex items-center justify-between px-4 py-2 bg-zinc-800 select-none cursor-grab active:cursor-grabbing"
     onMouseDown={startDrag}
   >
-    <span className="text-sm font-medium text-zinc-300">VoiceBox</span>
+    <span className="text-sm font-medium text-zinc-300">{title}</span>
     <button
       onClick={() => getCurrentWindow().hide()}
       className="flex items-center justify-center w-6 h-6 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"

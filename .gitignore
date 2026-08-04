@@ -10,6 +10,10 @@ voicebox.json
 .env
 .dev.vars
 
+# Machine-specific, not secret: names a code-signing cert that only exists
+# on one machine. See src-tauri/tauri.local.conf.example.json.
+src-tauri/tauri.local.conf.json
+
 # Cloudflare
 .wrangler
 worker/node_modules

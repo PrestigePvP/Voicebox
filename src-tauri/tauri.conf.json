@@ -19,7 +19,20 @@
         "height": 450,
         "decorations": false,
         "center": true,
-        "visible": true,
+        "visible": false,
+        "transparent": true,
+        "hiddenTitle": true
+      },
+      {
+        "label": "meetings",
+        "title": "VoiceBox Meetings",
+        "width": 900,
+        "height": 650,
+        "minWidth": 640,
+        "minHeight": 420,
+        "decorations": false,
+        "center": true,
+        "visible": false,
         "transparent": true,
         "hiddenTitle": true
       }

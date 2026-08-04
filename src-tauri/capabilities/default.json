@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/json_schemas/tauri-v2.json",
   "identifier": "default",
   "description": "Default capabilities for VoiceBox",
-  "windows": ["main", "overlay"],
+  "windows": ["main", "overlay", "meetings"],
   "permissions": [
     "core:default",
     "core:window:default",
